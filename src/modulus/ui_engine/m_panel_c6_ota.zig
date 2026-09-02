@@ -1,4 +1,4 @@
-//! M-Panel C6 Update — guarded ESP-Hosted slave OTA from USB or SD.
+//! M-Panel C6 Update — guarded ESP-Hosted slave OTA from USB.
 
 const std = @import("std");
 const geom = @import("geom.zig");
@@ -79,7 +79,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     font.drawTextRole(logical, x, y, link, if (state.c6_connected) theme.primary else theme.on_error_container, .body_m);
     if (state.version_len != 0) font.drawTextRole(logical, x + 270, y, state.versionText(), theme.on_surface_variant, .body_m);
     lay.refresh = .{ .x = right - 190, .y = y - 10, .w = 190, .h = 60 };
-    widgets.drawTonalButton(logical, lay.refresh, "Refresh drives", theme);
+    widgets.drawTonalButton(logical, lay.refresh, "Refresh USB", theme);
     y += tokens.Logical.touch_min + tokens.Space.sm;
 
     const row_h: i32 = 54;
@@ -95,7 +95,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
         font.drawTextRole(logical, r.x + tokens.Space.md, r.y + 16, state.fileText(i), if (selected) theme.on_secondary_container else theme.on_surface, .body_m);
         y += row_h + row_gap;
     }
-    if (lay.row_n == 0) font.drawTextRole(logical, x, y + 8, "No verified ESP32-C6 app images found on USB or SD.", theme.on_surface_variant, .body_m);
+    if (lay.row_n == 0) font.drawTextRole(logical, x, y + 8, "No verified ESP32-C6 app images found on USB.", theme.on_surface_variant, .body_m);
 
     const status_y = card.y + card.h - 150;
     font.drawTextRole(logical, x, status_y, state.statusText(), if (state.phase == .failed) theme.on_error_container else theme.on_surface_variant, .body_m);

@@ -21,7 +21,6 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#define OTA_SD_ROOT "/sdcard"
 #define OTA_USB_ROOT "/usb"
 #define OTA_MAX_IMAGE_SIZE (3U * 1024U * 1024U)
 #define OTA_REPLY_TIMEOUT_MS 2500U
@@ -183,20 +182,18 @@ void modulus_s3_ota_refresh(void)
 {
     if (s_worker_running) return;
     modulus_s3_ota_snapshot_t next = { .phase = MODULUS_S3_OTA_READY };
-    if (!modulus_storage_is_mounted()) (void)modulus_storage_mount();
     const bool usb_mounted = modulus_storage_usb_volume_mounted();
     next.s3_connected = probe_s3(next.s3_version, sizeof(next.s3_version));
     char paths[MODULUS_S3_OTA_MAX_FILES][192] = {{0}};
     const bool usb_open = usb_mounted && scan_root(&next, paths, OTA_USB_ROOT, "USB");
-    const bool sd_open = scan_root(&next, paths, OTA_SD_ROOT, "SD");
     if (!next.s3_connected) {
         next.phase = MODULUS_S3_OTA_ERROR;
         snprintf(next.status, sizeof(next.status), "S3 bridge not responding. Check peer MAC/channel and first-flash firmware.");
-    } else if (!usb_open && !sd_open) {
+    } else if (!usb_open) {
         next.phase = MODULUS_S3_OTA_ERROR;
-        snprintf(next.status, sizeof(next.status), "Insert a FAT USB drive or SD card, then refresh.");
+        snprintf(next.status, sizeof(next.status), "Insert a FAT USB drive, wait for it to mount, then refresh.");
     } else if (next.file_count == 0) {
-        snprintf(next.status, sizeof(next.status), "No valid ESP32-S3 app images found on USB or SD.");
+        snprintf(next.status, sizeof(next.status), "No valid ESP32-S3 app images found in the USB drive root.");
     } else {
         snprintf(next.status, sizeof(next.status), "%u verified S3 image(s) found. Select one and check it.", next.file_count);
     }
@@ -264,7 +261,7 @@ static void ota_worker(void *arg)
     image_size = s_armed_size;
     s_state.phase = MODULUS_S3_OTA_FLASHING;
     s_state.progress = 0;
-    snprintf(s_state.status, sizeof(s_state.status), "Flashing S3 over ESP-NOW. Keep the CNC idle; do not remove power or SD.");
+    snprintf(s_state.status, sizeof(s_state.status), "Flashing S3 over ESP-NOW. Keep the CNC idle; do not remove power or USB.");
     taskEXIT_CRITICAL(&s_lock);
 
     uint32_t session = esp_random();

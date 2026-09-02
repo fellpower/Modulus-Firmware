@@ -20,7 +20,6 @@
 #include "freertos/portmacro.h"
 #include "freertos/task.h"
 
-#define OTA_SD_ROOT "/sdcard"
 #define OTA_USB_ROOT "/usb"
 #define OTA_CHUNK_SIZE 4096
 #define OTA_MAX_IMAGE_SIZE (4U * 1024U * 1024U)
@@ -28,7 +27,7 @@
 static const char *TAG = "c6_ota";
 static modulus_c6_ota_snapshot_t s_state = {
     .phase = MODULUS_C6_OTA_IDLE,
-    .status = "Open this page to scan USB and SD. Nothing is flashed automatically.",
+    .status = "Open this page to scan a USB drive. Nothing is flashed automatically.",
 };
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_worker_running;
@@ -124,9 +123,6 @@ void modulus_c6_ota_refresh(void)
 {
     if (s_worker_running) return;
     modulus_c6_ota_snapshot_t next = { .phase = MODULUS_C6_OTA_READY };
-    /* Support cards inserted after boot. Mount is explicit here, not from the
-     * periodic storage poll, so a user-requested Eject remains respected. */
-    if (!modulus_storage_is_mounted()) (void)modulus_storage_mount();
     const bool usb_mounted = modulus_storage_usb_volume_mounted();
     esp_hosted_coprocessor_fwver_t ver = {0};
     if (esp_hosted_get_coprocessor_fwversion(&ver) == ESP_OK) {
@@ -136,15 +132,14 @@ void modulus_c6_ota_refresh(void)
     }
     char paths[MODULUS_C6_OTA_MAX_FILES][192] = {{0}};
     const bool usb_open = usb_mounted && scan_root(&next, paths, OTA_USB_ROOT, "USB");
-    const bool sd_open = scan_root(&next, paths, OTA_SD_ROOT, "SD");
     if (!next.c6_connected) {
         next.phase = MODULUS_C6_OTA_ERROR;
         snprintf(next.status, sizeof(next.status), "C6 is not responding over ESP-Hosted/SDIO.");
-    } else if (!usb_open && !sd_open) {
+    } else if (!usb_open) {
         next.phase = MODULUS_C6_OTA_ERROR;
-        snprintf(next.status, sizeof(next.status), "Insert a FAT USB drive or SD card, then refresh.");
+        snprintf(next.status, sizeof(next.status), "Insert a FAT USB drive, wait for it to mount, then refresh.");
     } else if (next.file_count == 0) {
-        snprintf(next.status, sizeof(next.status), "No valid ESP32-C6 app images found on USB or SD.");
+        snprintf(next.status, sizeof(next.status), "No valid ESP32-C6 app images found in the USB drive root.");
     } else {
         snprintf(next.status, sizeof(next.status), "%u C6 firmware image(s) found. Select one and check it.", next.file_count);
     }

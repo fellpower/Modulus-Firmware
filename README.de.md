@@ -25,8 +25,12 @@ Modulus verteilt seine Aufgaben auf mehrere Prozessoren. Für Updates des
 ESP32-C6 im Tab5 und der ESP32-S3-Bridge war bisher jeweils ein separater
 USB-/Bootloader-Zugang nötig. Dieser Branch ergänzt **C6 Update** und
 **S3 Update** im M Panel. C6-App-Images werden intern über ESP-Hosted/SDIO
-übertragen, S3-App-Images per ESP-NOW. Als Quelle funktionieren ein
-FAT-formatierter USB-A-Stick oder eine microSD-Karte.
+übertragen, S3-App-Images per ESP-NOW. Beide Updater lesen ausschließlich das
+Stammverzeichnis eines FAT-formatierten USB-A-Sticks. Die microSD-Unterstützung
+war beim Entwickeln und Testen hilfreich, wurde aber aus den Updatemenüs
+entfernt: In vielen eingebauten Gehäusen ist der Kartenslot nicht erreichbar,
+und zwei mögliche Updatequellen machten den Ablauf unnötig uneindeutig. Andere
+microSD-Funktionen von Modulus bleiben unverändert.
 
 Der Ablauf lautet **zuerst P4, danach C6 und/oder S3**. Der XIAO ESP32-S3
 benötigt einmalig das OTA-fähige Vollimage per USB; alle späteren Updates nutzen
@@ -64,7 +68,7 @@ wiederhergestellt werden.
 
 - ESP-IDF 6.0.1 und esptool
 - USB-Verbindung zum Tab5-P4 (Beispiel: `COM5`)
-- FAT-formatierter USB-Stick (empfohlen) oder FAT32-microSD-Karte
+- FAT32-formatierter USB-Stick
 - Passende Builds für P4 sowie das jeweilige C6- oder S3-Ziel
 
 Die COM-Portnummer kann auf deinem Rechner abweichen.
@@ -117,12 +121,12 @@ Sie darf umbenannt werden, zum Beispiel in
 
 ### 3. ESP32-C6 über das Tab5 aktualisieren
 
-1. USB-Stick oder SD-Karte als FAT formatieren.
+1. USB-Stick als FAT32 formatieren.
 2. **Nur** `network_adapter.bin` beziehungsweise die umbenannte OTA-Datei in
    das Stammverzeichnis des Datenträgers kopieren.
-3. USB-Stick (empfohlen) oder SD-Karte in das laufende Tab5 einsetzen.
+3. USB-Stick in den USB-A-Port des laufenden Tab5 einsetzen.
 4. **M Panel → C6 Update** öffnen.
-5. **Refresh drives** drücken, `USB:`- oder `SD:`-Datei auswählen und **Check image** drücken.
+5. **Refresh USB** drücken, die `USB:`-Datei auswählen und **Check image** drücken.
 6. Prüfen, dass ein ESP32-C6-Application-Image erkannt und akzeptiert wird.
 7. **Flash C6** drücken und die Sicherheitsabfrage bestätigen.
 8. Während des Fortschrittsbalkens weder Strom noch Quelldatenträger entfernen.
@@ -174,7 +178,7 @@ python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-xiao-s3-bridge-
 Falls durch das Löschen die Einstellungen verloren gingen, anschließend die
 S3-MAC-Adresse und den ESP-NOW-Kanal unter **Settings → Wireless** erneut
 eintragen. Danach nur `modulus-xiao-s3-bridge-ota-app.bin` in das Stammverzeichnis
-eines FAT-formatierten USB-Sticks (empfohlen) oder der SD-Karte kopieren und
+eines FAT32-formatierten USB-Sticks kopieren, diesen in USB-A einsetzen und
 **M Panel → S3 Update** öffnen. Datei auswählen,
 **Check S3 image**, **Flash S3** und nach erfolgreicher Prüfung **Restart S3**
 drücken. Für den ersten Test darf dasselbe App-Image noch einmal per OTA
@@ -186,11 +190,12 @@ die C6-Seite ausschließlich ESP32-C6-App-Images. Vollständige/zusammengeführt
 Images werden von beiden OTA-Seiten absichtlich abgewiesen und gehören nur per
 USB an Offset `0x0`.
 
-Sowohl **C6 Update** als auch **S3 Update** durchsuchen den USB-A-Massenspeicher
-und die microSD-Karte. Treffer werden mit `USB:` beziehungsweise `SD:`
-gekennzeichnet. Wenn das Gehäuse den SD-Slot verdeckt, ist USB-A der empfohlene
-Wartungsweg: FAT-formatierten Stick einstecken, kurz auf den Mount warten und
-**Refresh drives** drücken.
+Sowohl **C6 Update** als auch **S3 Update** durchsuchen ausschließlich das
+Stammverzeichnis des USB-A-Massenspeichers. Treffer werden mit `USB:`
+gekennzeichnet. FAT32-formatierten Stick einstecken, kurz auf das Einbinden
+warten und **Refresh USB** drücken. Die microSD-Karte wird bewusst nicht als
+OTA-Quelle angeboten; so bleibt die Wartung eindeutig und funktioniert auch
+mit Gehäusen, die den Kartenslot verdecken.
 
 Falls das serielle Befehlsmenü beim Start nicht sichtbar war, eine leere
 Eingabe mit Enter senden. Das Menü mit `uartping`, Konfiguration und Diagnose

@@ -23,8 +23,12 @@ Modulus runs across multiple processors, but the Tab5's ESP32-C6 radio and the
 cabinet ESP32-S3 bridge traditionally required separate USB/bootloader access.
 This branch adds guarded **C6 Update** and **S3 Update** pages to M Panel. C6
 application images travel over the internal ESP-Hosted/SDIO link; S3
-application images travel over ESP-NOW. Both pages read a FAT-formatted USB-A
-drive or microSD card and reject images built for the wrong chip.
+application images travel over ESP-NOW. Both updater pages read the root of a
+FAT-formatted USB-A drive and reject images built for the wrong chip. microSD
+support was useful during development, but was removed from the updater UI
+because the slot is inaccessible in many installed enclosures and presenting
+two maintenance sources made the workflow unnecessarily ambiguous. Other
+Modulus microSD features are unchanged.
 
 The maintenance sequence is **P4 first, then C6 and/or S3**: install the P4
 firmware containing the OTA UI, boot Modulus normally, and select the matching
@@ -239,12 +243,12 @@ firmware/tab5-c6/build/network_adapter.bin
 It may be renamed to a descriptive name such as
 `modulus-c6-ota-2.12.12.bin`; renaming does not change its contents.
 
-1. Format a USB drive or SD card as FAT32.
+1. Format a USB drive as FAT32.
 2. Copy **only the C6 application image** (`network_adapter.bin`, or its renamed
    equivalent) to the drive root.
-3. Insert the USB drive (recommended) or card into the running Tab5.
+3. Insert the USB drive into the running Tab5 USB-A port.
 4. Open **M Panel → C6 Update**.
-5. Select **Refresh drives**, choose the `USB:` or `SD:` file, and select **Check image**.
+5. Select **Refresh USB**, choose the `USB:` file, and select **Check image**.
 6. Verify that the screen identifies an ESP32-C6 application and accepts its
    compatibility check.
 7. Select **Flash C6** and confirm the warning. Do not remove power or the
@@ -302,8 +306,8 @@ python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-xiao-s3-bridge-
 
 Re-enter the S3 MAC and ESP-NOW channel in **Settings → Wireless** if the erase
 removed the saved peer configuration. Copy only
-`modulus-xiao-s3-bridge-ota-app.bin` to the root of a FAT-formatted USB drive
-(recommended) or SD card, then open
+`modulus-xiao-s3-bridge-ota-app.bin` to the root of a FAT-formatted USB drive,
+insert it into the Tab5 USB-A port, then open
 **M Panel → S3 Update**. Select the file, press **Check S3 image**, then
 **Flash S3**, and finally **Restart S3**. Reinstalling the same app image is a
 valid first OTA test.
@@ -313,11 +317,11 @@ S3 page accepts only an ESP32-S3 application image; the C6 page accepts only an
 ESP32-C6 application image. A merged/full-flash image is intentionally rejected
 by both OTA pages and must only be written over USB at offset `0x0`.
 
-Both **C6 Update** and **S3 Update** scan the Tab5 USB-A mass-storage volume and
-the microSD card. Results are prefixed with `USB:` or `SD:`. USB-A is the
-recommended maintenance path when the installed enclosure does not expose the
-microSD slot. Insert the FAT-formatted stick, wait for it to mount, and press
-**Refresh drives**.
+Both **C6 Update** and **S3 Update** scan only the root of the Tab5 USB-A
+mass-storage volume. Results are prefixed with `USB:`. Insert the FAT-formatted
+stick, wait for it to mount, and press **Refresh USB**. The microSD card is not
+offered as an OTA source; this keeps firmware maintenance clear and usable with
+installed enclosures that do not expose the card slot.
 
 If the serial command menu was missed during boot, press Enter on an empty line
 to print it again (`uartping`, configuration commands, and diagnostics).
@@ -390,13 +394,13 @@ Re-pack local builds into release zips: `.\scripts\package_flash_images.ps1`.
 
 The Tab5 **M Panel → C6 Update** page updates the ESP32-C6 over the internal
 ESP-Hosted SDIO connection. Copy an ESP32-C6 **application image** (`.bin`) to
-the root of a FAT32-formatted SD card, insert it, and open the page. For builds
+the root of a FAT32-formatted USB drive, insert it into USB-A, and open the page. For builds
 from this repository, that application is
 `firmware/tab5-c6/build/network_adapter.bin`. Use
-**Refresh SD**, select the file, then **Check image**. Modulus verifies the ESP
+**Refresh USB**, select the file, then **Check image**. Modulus verifies the ESP
 image header and ESP32-C6 chip ID before enabling **Flash C6**.
 
-Flashing never starts automatically. Keep power and the SD card connected while
+Flashing never starts automatically. Keep power and the USB drive connected while
 the progress bar is active. After successful activation, **Restart Modulus** is
 enabled so the P4 can reboot and reconnect to the updated C6 firmware.
 
