@@ -17,6 +17,7 @@ pub const ToolId = enum(u8) {
     sd = 3,
     zigbee = 4,
     c6_update = 5,
+    s3_update = 6,
 };
 
 pub const Tool = struct {
@@ -33,6 +34,7 @@ pub const tools = [_]Tool{
     .{ .label = "SD Card", .icon = .hard_drives },
     .{ .label = "Zigbee", .icon = .broadcast },
     .{ .label = "C6 Update", .icon = .cpu },
+    .{ .label = "S3 Update", .icon = .cpu },
 };
 
 pub fn toolEnabled(index: u8, usb_host: bool) bool {

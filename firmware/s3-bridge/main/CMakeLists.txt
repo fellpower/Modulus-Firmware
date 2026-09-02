@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.cpp"
         "espnow_link.cpp"
+        "s3_ota.cpp"
         "uart_bridge.cpp"
         "halt_gpio.cpp"
         "bridge_board.cpp"
@@ -14,6 +15,7 @@ idf_component_register(
         esp_timer
         esp_driver_uart
         esp_driver_gpio
+        app_update
         freertos
         log
 )

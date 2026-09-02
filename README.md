@@ -17,19 +17,24 @@
 
 **One Device, One Software. Real control for any machine — no lag, no brand lock-in, no compromise.**
 
-## Why this feature branch exists
+## Why this OTA feature branch exists
 
-The ESP32-C6 is the Tab5's wireless coprocessor, but updating it traditionally
-requires a separate USB/bootloader connection. This branch adds a guarded
-**C6 Update** page to the P4 user interface so a compatible C6 application can
-be selected from the Tab5 SD card and transferred through the existing
-ESP-Hosted SDIO link.
+Modulus runs across multiple processors, but the Tab5's ESP32-C6 radio and the
+cabinet ESP32-S3 bridge traditionally required separate USB/bootloader access.
+This branch adds guarded **C6 Update** and **S3 Update** pages to M Panel. C6
+application images travel over the internal ESP-Hosted/SDIO link; S3
+application images travel over ESP-NOW. Both pages read a FAT-formatted USB-A
+drive or microSD card and reject images built for the wrong chip.
 
-The intended maintenance sequence is therefore **P4 first, C6 second**: install
-the P4 firmware that contains the updater, boot Modulus normally, then use
-**M Panel → C6 Update** to update the C6. An image check, an explicit
-confirmation step, a progress display, and a post-update restart button keep
-the operation deliberate; C6 flashing never starts automatically.
+The maintenance sequence is **P4 first, then C6 and/or S3**: install the P4
+firmware containing the OTA UI, boot Modulus normally, and select the matching
+updater. The XIAO ESP32-S3 needs the OTA-capable full image once over USB; later
+updates use only its application image. Image inspection, explicit arming,
+progress feedback, and a separate restart action keep every write deliberate.
+Nothing is flashed automatically.
+
+The complete C6 and XIAO S3 OTA paths, including an S3 update from USB-A and a
+successful boot from its second OTA slot, have been verified on real hardware.
 
 Handheld DRO + MPG **client** on Tab5 — Zig dual-core anti-lag firmware talking to grblHAL (and other engines) over ESP-NOW or RS-485. It does not replace your motion controller.
 
@@ -183,15 +188,16 @@ Download **v3.1.0** assets (bootloader + partition table + app per target):
 2. USB cables + drivers for each chip
 3. Unzip each package into its own folder (commands below assume you `cd` into that folder)
 
-**Recommended order for this feature branch:** P4 → C6 through the on-device
-updater → S3 bridge → NanoH2 (optional). The separate C6 USB procedure is a
-recovery path, not the normal update method. Keep the machine E-Stop in reach.
+**Recommended order for this feature branch:** P4 → C6 through **C6 Update** →
+one-time S3 USB first-flash → later S3 images through **S3 Update** → NanoH2
+(optional). The separate C6 USB procedure is a recovery path. Keep the machine
+E-Stop in reach.
 
 COM ports on your PC may differ — change `-p COMx` to match Device Manager.
 
-### 1. Tab5 P4 (main pendant and C6 updater)
+### 1. Tab5 P4 (main pendant and OTA updaters)
 
-The P4 must contain this feature branch before it can update the C6. Build this
+The P4 must contain this feature branch before it can update the C6 or S3. Build this
 branch with `scripts/build_tab5.ps1`, or use a P4 package produced from this
 branch. Then flash its complete P4 set:
 
@@ -204,8 +210,8 @@ esptool.py --chip esp32p4 -p COM5 --before default-reset --after hard-reset writ
   0x10000 modulus_tab5.bin
 ```
 
-Power-cycle the Tab5 and wait for the normal Modulus dashboard. Open **M Panel →
-C6 Update** and confirm that the updater page is present before continuing.
+Power-cycle the Tab5 and wait for the normal Modulus dashboard. Confirm that
+**M Panel → C6 Update** and **M Panel → S3 Update** are present.
 
 ### 2. Tab5 C6 through SDIO OTA (normal method)
 
@@ -219,16 +225,16 @@ firmware/tab5-c6/build/network_adapter.bin
 It may be renamed to a descriptive name such as
 `modulus-c6-ota-2.12.12.bin`; renaming does not change its contents.
 
-1. Format an SD card as FAT32.
+1. Format a USB drive or SD card as FAT32.
 2. Copy **only the C6 application image** (`network_adapter.bin`, or its renamed
-   equivalent) to the SD-card root.
-3. Insert the card into the running Tab5.
+   equivalent) to the drive root.
+3. Insert the USB drive (recommended) or card into the running Tab5.
 4. Open **M Panel → C6 Update**.
-5. Select **Refresh SD**, choose the file, and select **Check image**.
+5. Select **Refresh drives**, choose the `USB:` or `SD:` file, and select **Check image**.
 6. Verify that the screen identifies an ESP32-C6 application and accepts its
    compatibility check.
-7. Select **Flash C6** and confirm the warning. Do not remove power or the SD
-   card while the progress bar is moving.
+7. Select **Flash C6** and confirm the warning. Do not remove power or the
+   source drive while the progress bar is moving.
 8. After activation succeeds, select **Restart Modulus**. Confirm that the
    dashboard returns and the C6/ESP-NOW connection is available.
 
@@ -269,6 +275,38 @@ esptool.py --chip esp32s3 -p COM8 --before default-reset --after hard-reset writ
 ```
 
 Wire S3 UART to your CNC (grblHAL) serial. On the Tab5: **Settings → Wireless → ESP-NOW → enter S3 MAC**, lock channel **1 / 6 / 11**.
+
+#### Enabling and testing S3 OTA on a XIAO ESP32-S3
+
+S3 OTA requires the new dual-slot partition table and receiver. Install it once
+over USB with `modulus-xiao-s3-bridge-first-flash-for-ota.bin` at offset `0x0`:
+
+```powershell
+python -m esptool --chip esp32s3 -p COM8 erase-flash
+python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-xiao-s3-bridge-first-flash-for-ota.bin
+```
+
+Re-enter the S3 MAC and ESP-NOW channel in **Settings → Wireless** if the erase
+removed the saved peer configuration. Copy only
+`modulus-xiao-s3-bridge-ota-app.bin` to the root of a FAT-formatted USB drive
+(recommended) or SD card, then open
+**M Panel → S3 Update**. Select the file, press **Check S3 image**, then
+**Flash S3**, and finally **Restart S3**. Reinstalling the same app image is a
+valid first OTA test.
+
+Keep the CNC idle and do not remove power or the source drive during transfer. The
+S3 page accepts only an ESP32-S3 application image; the C6 page accepts only an
+ESP32-C6 application image. A merged/full-flash image is intentionally rejected
+by both OTA pages and must only be written over USB at offset `0x0`.
+
+Both **C6 Update** and **S3 Update** scan the Tab5 USB-A mass-storage volume and
+the microSD card. Results are prefixed with `USB:` or `SD:`. USB-A is the
+recommended maintenance path when the installed enclosure does not expose the
+microSD slot. Insert the FAT-formatted stick, wait for it to mount, and press
+**Refresh drives**.
+
+If the serial command menu was missed during boot, press Enter on an empty line
+to print it again (`uartping`, configuration commands, and diagnostics).
 
 ### 4. NanoH2 (Zigbee hub, optional)
 

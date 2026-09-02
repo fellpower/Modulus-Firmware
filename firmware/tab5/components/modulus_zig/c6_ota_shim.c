@@ -20,19 +20,21 @@
 #include "freertos/portmacro.h"
 #include "freertos/task.h"
 
-#define OTA_ROOT "/sdcard"
+#define OTA_SD_ROOT "/sdcard"
+#define OTA_USB_ROOT "/usb"
 #define OTA_CHUNK_SIZE 4096
 #define OTA_MAX_IMAGE_SIZE (4U * 1024U * 1024U)
 
 static const char *TAG = "c6_ota";
 static modulus_c6_ota_snapshot_t s_state = {
     .phase = MODULUS_C6_OTA_IDLE,
-    .status = "Open this page to scan the SD card. Nothing is flashed automatically.",
+    .status = "Open this page to scan USB and SD. Nothing is flashed automatically.",
 };
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_worker_running;
 static char s_armed_path[192];
 static size_t s_armed_size;
+static char s_file_paths[MODULUS_C6_OTA_MAX_FILES][192];
 
 static void state_status(modulus_c6_ota_phase_t phase, const char *text)
 {
@@ -48,6 +50,42 @@ static bool safe_bin_name(const char *name)
         strstr(name, "..") || strchr(name, '/') || strchr(name, '\\')) return false;
     const size_t n = strlen(name);
     return n > 4 && strcasecmp(name + n - 4, ".bin") == 0;
+}
+
+static bool image_path(char *out, size_t out_len, const char *root, const char *name)
+{
+    const size_t root_len = root ? strlen(root) : 0;
+    const size_t name_len = name ? strlen(name) : 0;
+    if (!name || root_len + 1U + name_len + 1U > out_len) return false;
+    memcpy(out, root, root_len);
+    out[root_len] = '/';
+    memcpy(out + root_len + 1U, name, name_len + 1U);
+    return true;
+}
+
+static esp_err_t inspect_image(const char *path, size_t *size_out, esp_app_desc_t *desc_out);
+
+static bool scan_root(modulus_c6_ota_snapshot_t *next,
+                      char paths[MODULUS_C6_OTA_MAX_FILES][192],
+                      const char *root, const char *label)
+{
+    DIR *dir = opendir(root);
+    if (!dir) return false;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && next->file_count < MODULUS_C6_OTA_MAX_FILES) {
+        if (!safe_bin_name(entry->d_name)) continue;
+        char path[192];
+        size_t image_size = 0;
+        esp_app_desc_t image_desc = {0};
+        if (!image_path(path, sizeof(path), root, entry->d_name)) continue;
+        if (inspect_image(path, &image_size, &image_desc) != ESP_OK) continue;
+        const uint8_t index = next->file_count;
+        snprintf(next->files[index], sizeof(next->files[index]), "%.3s: %.90s", label, entry->d_name);
+        snprintf(paths[index], sizeof(paths[index]), "%s", path);
+        next->file_count++;
+    }
+    closedir(dir);
+    return true;
 }
 
 static esp_err_t inspect_image(const char *path, size_t *size_out, esp_app_desc_t *desc_out)
@@ -88,38 +126,31 @@ void modulus_c6_ota_refresh(void)
     modulus_c6_ota_snapshot_t next = { .phase = MODULUS_C6_OTA_READY };
     /* Support cards inserted after boot. Mount is explicit here, not from the
      * periodic storage poll, so a user-requested Eject remains respected. */
-    if (!modulus_storage_is_mounted()) {
-        (void)modulus_storage_mount();
-    }
+    if (!modulus_storage_is_mounted()) (void)modulus_storage_mount();
+    const bool usb_mounted = modulus_storage_usb_volume_mounted();
     esp_hosted_coprocessor_fwver_t ver = {0};
     if (esp_hosted_get_coprocessor_fwversion(&ver) == ESP_OK) {
         next.c6_connected = true;
         snprintf(next.c6_version, sizeof(next.c6_version), "%lu.%lu.%lu",
                  (unsigned long)ver.major1, (unsigned long)ver.minor1, (unsigned long)ver.patch1);
     }
-    DIR *dir = opendir(OTA_ROOT);
-    if (dir) {
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL && next.file_count < MODULUS_C6_OTA_MAX_FILES) {
-            if (!safe_bin_name(entry->d_name)) continue;
-            memcpy(next.files[next.file_count], entry->d_name, strlen(entry->d_name) + 1U);
-            next.file_count++;
-        }
-        closedir(dir);
-    }
+    char paths[MODULUS_C6_OTA_MAX_FILES][192] = {{0}};
+    const bool usb_open = usb_mounted && scan_root(&next, paths, OTA_USB_ROOT, "USB");
+    const bool sd_open = scan_root(&next, paths, OTA_SD_ROOT, "SD");
     if (!next.c6_connected) {
         next.phase = MODULUS_C6_OTA_ERROR;
         snprintf(next.status, sizeof(next.status), "C6 is not responding over ESP-Hosted/SDIO.");
-    } else if (!dir) {
+    } else if (!usb_open && !sd_open) {
         next.phase = MODULUS_C6_OTA_ERROR;
-        snprintf(next.status, sizeof(next.status), "SD card is not mounted.");
+        snprintf(next.status, sizeof(next.status), "Insert a FAT USB drive or SD card, then refresh.");
     } else if (next.file_count == 0) {
-        snprintf(next.status, sizeof(next.status), "No .bin files found in the SD card root.");
+        snprintf(next.status, sizeof(next.status), "No valid ESP32-C6 app images found on USB or SD.");
     } else {
         snprintf(next.status, sizeof(next.status), "%u C6 firmware image(s) found. Select one and check it.", next.file_count);
     }
     taskENTER_CRITICAL(&s_lock);
     s_state = next;
+    memcpy(s_file_paths, paths, sizeof(s_file_paths));
     s_armed_path[0] = 0;
     s_armed_size = 0;
     taskEXIT_CRITICAL(&s_lock);
@@ -144,7 +175,9 @@ void modulus_c6_ota_arm_selected(void)
     modulus_c6_ota_get_snapshot(&snap);
     if (s_worker_running || !snap.c6_connected || snap.selected >= snap.file_count) return;
     char path[sizeof(s_armed_path)];
-    snprintf(path, sizeof(path), OTA_ROOT "/%s", snap.files[snap.selected]);
+    taskENTER_CRITICAL(&s_lock);
+    snprintf(path, sizeof(path), "%s", s_file_paths[snap.selected]);
+    taskEXIT_CRITICAL(&s_lock);
     size_t size = 0;
     esp_app_desc_t desc = {0};
     const esp_err_t err = inspect_image(path, &size, &desc);
@@ -173,7 +206,7 @@ static void ota_worker(void *arg)
     image_size = s_armed_size;
     s_state.phase = MODULUS_C6_OTA_FLASHING;
     s_state.progress = 0;
-    snprintf(s_state.status, sizeof(s_state.status), "Flashing C6. Do not remove power or the SD card.");
+    snprintf(s_state.status, sizeof(s_state.status), "Flashing C6. Do not remove power or the source drive.");
     taskEXIT_CRITICAL(&s_lock);
 
     FILE *f = fopen(path, "rb");

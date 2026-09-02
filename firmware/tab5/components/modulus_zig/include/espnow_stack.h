@@ -48,6 +48,11 @@ typedef void (*modulus_espnow_stack_evt_fn)(uint8_t evt, const uint8_t *payload,
                                             void *ctx);
 
 void modulus_espnow_stack_set_evt_hook(modulus_espnow_stack_evt_fn fn, void *ctx);
+/** Independent control-plane listener used by S3 OTA. */
+void modulus_espnow_stack_set_aux_evt_hook(modulus_espnow_stack_evt_fn fn, void *ctx);
+
+/** Send to the S3 bridge MAC configured in Wireless settings. */
+bool modulus_espnow_stack_send_configured_peer(const uint8_t *data, size_t len);
 
 /** Re-apply bridge peer after NVS/channel change while transport open. */
 void modulus_espnow_transport_reapply_peer(void);

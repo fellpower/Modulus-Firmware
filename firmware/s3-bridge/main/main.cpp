@@ -11,6 +11,7 @@
 #include <nvs_flash.h>
 #include <esp_event.h>
 #include <esp_netif.h>
+#include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <driver/uart.h>
@@ -18,7 +19,7 @@
 #include <cstring>
 #include <cstdlib>
 
-static void print_boot_self_check()
+static bool print_boot_self_check()
 {
     bool espnow_ok = espnow_self_check();
     bool uart_ok = uart_bridge_self_check();
@@ -32,6 +33,7 @@ static void print_boot_self_check()
            uart_ok ? "PASS" : "FAIL",
            uart_bridge_tx_gpio(), uart_bridge_rx_gpio());
     printf("  Overall          : %s\r\n\r\n", all_ok ? "PASS" : "FAIL");
+    return all_ok;
 }
 
 static void print_link_health()
@@ -269,7 +271,15 @@ static void shell_task(void* arg)
         if (ch == EOF) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
         if (ch == '\r' || ch == '\n') {
-            if (pos == 0) { printf("> "); fflush(stdout); continue; }
+            if (pos == 0) {
+                /* A monitor attached after boot misses the one-time banner.
+                 * Empty Enter is therefore an intentional menu redraw. */
+                printf("\r\n");
+                print_help();
+                printf("> ");
+                fflush(stdout);
+                continue;
+            }
             line[pos] = '\0';
             pos = 0;
             printf("\r\n");
@@ -314,7 +324,15 @@ extern "C" void app_main()
     /* Initialise UART bridge (sets up driver + RX task) */
     uart_bridge_init();
 
-    print_boot_self_check();
+    const bool boot_self_check_ok = print_boot_self_check();
+
+    /* An OTA image becomes permanent only after its radio/UART self-check has
+     * completed. A crash before this point lets the bootloader roll it back. */
+    if (boot_self_check_ok) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_ota_mark_app_valid_cancel_rollback());
+    } else {
+        ESP_LOGE("main", "Boot self-check failed; OTA image remains pending for rollback");
+    }
 
     /* Launch interactive shell on UART0 / USB-CDC */
     xTaskCreatePinnedToCore(shell_task, "shell", 4096, NULL, 3, NULL, 1);

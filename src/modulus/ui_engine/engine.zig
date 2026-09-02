@@ -37,6 +37,7 @@ const m_panel_probe = @import("m_panel_probe.zig");
 const m_panel_sd = @import("m_panel_sd.zig");
 const m_panel_zigbee = @import("m_panel_zigbee.zig");
 const m_panel_c6_ota = @import("m_panel_c6_ota.zig");
+const m_panel_s3_ota = @import("m_panel_s3_ota.zig");
 const zb_exposes = @import("zb_exposes.zig");
 const sd_volume = @import("sd_volume.zig");
 const usb_volume = @import("usb_volume.zig");
@@ -177,6 +178,8 @@ pub const Engine = struct {
     stor_sys_sink: ?*const fn (*Engine, StorSysUiCmd) void = null,
     c6_ota_cmd_sink: ?*const fn (*Engine, m_panel_c6_ota.Action, u8) void = null,
     c6_ota_poll_sink: ?*const fn (*Engine) void = null,
+    s3_ota_cmd_sink: ?*const fn (*Engine, m_panel_s3_ota.Action, u8) void = null,
+    s3_ota_poll_sink: ?*const fn (*Engine) void = null,
     /// A USB G-code file is armed as the pending job. Set by the Load confirm,
     /// cleared by the bridge when the streamer goes terminal. While set, Cycle
     /// Start starts the pendant stream instead of a plain controller resume.
@@ -381,6 +384,8 @@ pub const Engine = struct {
     m_panel_zb_menu_scroll: usize = 0,
     m_panel_c6_ota_layout: m_panel_c6_ota.Layout = .{},
     m_panel_c6_ota_state: m_panel_c6_ota.State = .{},
+    m_panel_s3_ota_layout: m_panel_s3_ota.Layout = .{},
+    m_panel_s3_ota_state: m_panel_s3_ota.State = .{},
     m_panel_tool: u8 = 0xff,
     needs_full_repaint: bool = true,
     /// After full paint on settings: present window AABB only (margins unchanged).
@@ -719,6 +724,13 @@ pub const Engine = struct {
                     &self.logical,
                     self.theme,
                     &self.m_panel_c6_ota_state,
+                    self.m_panel_fx.value,
+                );
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.s3_update)) {
+                self.m_panel_s3_ota_layout = m_panel_s3_ota.paint(
+                    &self.logical,
+                    self.theme,
+                    &self.m_panel_s3_ota_state,
                     self.m_panel_fx.value,
                 );
             } else {
@@ -1673,13 +1685,7 @@ pub const Engine = struct {
 
     /// Modal chrome that must not be punched through by content-pane refresh.
     fn settingsHasBlockingModal(self: *const Engine) bool {
-        return self.settings_confirm != .none
-            or self.pad.open
-            or self.cnc_overlay != .none
-            or self.dash_overlay != .none
-            or self.pin_overlay != .none
-            or self.mach_str_overlay != .none
-            or self.extra_overlay != .none;
+        return self.settings_confirm != .none or self.pad.open or self.cnc_overlay != .none or self.dash_overlay != .none or self.pin_overlay != .none or self.mach_str_overlay != .none or self.extra_overlay != .none;
     }
 
     /// True when settings shell paint can present window AABB only (PSRAM BW).
@@ -4193,7 +4199,7 @@ pub const Engine = struct {
         }
         if (self.screen == .power) {
             if (self.power_confirm != .none) {
-            if (self.power_layout.confirm_ok.contains(x, y)) {
+                if (self.power_layout.confirm_ok.contains(x, y)) {
                     if (self.power_confirm == .shutdown) {
                         if (self.power_shutdown_sink) |s| s() else self.showSnackbar("Shutdown (stub)");
                     } else {
@@ -5761,6 +5767,9 @@ pub const Engine = struct {
         if (index == @intFromEnum(m_panel.ToolId.c6_update)) {
             if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
         }
+        if (index == @intFromEnum(m_panel.ToolId.s3_update)) {
+            if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+        }
         if (index == @intFromEnum(m_panel.ToolId.terminal) and self.m_panel_term_auto_scroll) {
             self.terminalFollowTail();
         }
@@ -5809,6 +5818,25 @@ pub const Engine = struct {
                     },
                     .restart => if (self.m_panel_c6_ota_state.phase == .success) {
                         if (self.c6_ota_cmd_sink) |sink| sink(self, .restart, 0);
+                    },
+                }
+                self.requestFull();
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.s3_update)) {
+                const h = m_panel_s3_ota.hit(self.m_panel_s3_ota_layout, x, y);
+                switch (h.kind) {
+                    .none => {},
+                    .scrim, .back => self.returnToMPanelFromTool(),
+                    .exit => self.closeToolToDashboard(),
+                    .refresh => if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0),
+                    .row => if (self.s3_ota_cmd_sink) |sink| sink(self, .select, h.index),
+                    .check => if (self.m_panel_s3_ota_state.file_count > 0 and self.m_panel_s3_ota_state.phase != .flashing) {
+                        if (self.s3_ota_cmd_sink) |sink| sink(self, .check, 0);
+                    },
+                    .flash => if (self.m_panel_s3_ota_state.phase == .armed) {
+                        if (self.s3_ota_cmd_sink) |sink| sink(self, .flash, 0);
+                    },
+                    .restart => if (self.m_panel_s3_ota_state.phase == .success) {
+                        if (self.s3_ota_cmd_sink) |sink| sink(self, .restart, 0);
                     },
                 }
                 self.requestFull();

@@ -10,6 +10,7 @@
 #include "bridge_config.h"
 #include "bridge_nvs.h"
 #include "bridge_protocol.h"
+#include "s3_ota.h"
 
 #include <atomic>
 #include <cstring>
@@ -297,6 +298,11 @@ static void on_recv(const esp_now_recv_info_t* info,
         return;
     }
 
+    if (s3_ota_try_handle(info->src_addr, data, static_cast<size_t>(len))) {
+        defer_learn_mac(info->src_addr);
+        return;
+    }
+
     if (len == BRIDGE_MOD_PROBE_LEN &&
         memcmp(data, BRIDGE_MOD_PROBE, BRIDGE_MOD_PROBE_LEN) == 0) {
         defer_learn_mac(info->src_addr);
@@ -449,6 +455,7 @@ void espnow_init()
     }
 
     s_espnow_ready = true;
+    s3_ota_init(espnow_send_chunk);
     ESP_LOGI(TAG, "ESP-NOW initialised (channel %d)", s_channel);
 }
 

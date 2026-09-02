@@ -15,6 +15,7 @@ set(MODULUS_CORE_SRCS
     "canbus_shim.c"
     "c6_sdio_host.c"
     "c6_ota_shim.c"
+    "s3_ota_shim.c"
     "zb_uart_host.c"
     "zb_devdb.c"
     "zb_devdb_data.c"

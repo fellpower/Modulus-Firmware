@@ -1330,6 +1330,36 @@ fn c6OtaCmd(eng: *Engine, action: ui_engine.m_panel_c6_ota.Action, index: u8) vo
     c6OtaPoll(eng);
 }
 
+fn s3OtaPoll(eng: *Engine) void {
+    var snap: c.modulus_s3_ota_snapshot_t = undefined;
+    c.modulus_s3_ota_get_snapshot(&snap);
+    var next: ui_engine.m_panel_s3_ota.State = .{};
+    next.phase = @enumFromInt(@min(@as(u8, @intCast(snap.phase)), @intFromEnum(ui_engine.m_panel_s3_ota.Phase.failed)));
+    next.file_count = @min(@as(u8, @intCast(snap.file_count)), ui_engine.m_panel_s3_ota.max_files);
+    next.selected = @min(@as(u8, @intCast(snap.selected)), if (next.file_count > 0) next.file_count - 1 else 0);
+    next.progress = @min(@as(u8, @intCast(snap.progress)), 100);
+    next.s3_connected = snap.s3_connected;
+    next.version_len = copyC6Text(next.version[0..], snap.s3_version);
+    next.status_len = copyC6Text(next.status[0..], snap.status);
+    var i: usize = 0;
+    while (i < next.file_count) : (i += 1) next.file_lens[i] = copyC6Text(next.files[i][0..], snap.files[i]);
+    if (!std.mem.eql(u8, std.mem.asBytes(&eng.m_panel_s3_ota_state), std.mem.asBytes(&next))) {
+        eng.m_panel_s3_ota_state = next;
+        if (eng.m_panel_tool == @intFromEnum(ui_engine.m_panel.ToolId.s3_update)) eng.requestFull();
+    }
+}
+
+fn s3OtaCmd(eng: *Engine, action: ui_engine.m_panel_s3_ota.Action, index: u8) void {
+    switch (action) {
+        .refresh => c.modulus_s3_ota_refresh(),
+        .select => c.modulus_s3_ota_select(index),
+        .check => c.modulus_s3_ota_arm_selected(),
+        .flash => c.modulus_s3_ota_start(),
+        .restart => c.modulus_s3_ota_restart(),
+    }
+    s3OtaPoll(eng);
+}
+
 pub fn dumpBegin() void {
     device_runtime.settingsDumpBegin();
 }
@@ -1407,6 +1437,8 @@ pub fn install(eng: *Engine) void {
     eng.stor_sys_sink = storSysCmd;
     eng.c6_ota_cmd_sink = c6OtaCmd;
     eng.c6_ota_poll_sink = c6OtaPoll;
+    eng.s3_ota_cmd_sink = s3OtaCmd;
+    eng.s3_ota_poll_sink = s3OtaPoll;
 
     // storage / i2c / wireless deferred to installLate — after boot i2c_coex.
     c.modulus_display_resume_activity_monitor();

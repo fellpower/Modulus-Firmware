@@ -1,4 +1,4 @@
-//! M-Panel C6 Update — guarded ESP-Hosted slave OTA from USB or SD.
+//! M-Panel S3 Update — guarded ESP-NOW OTA from USB or SD.
 
 const std = @import("std");
 const geom = @import("geom.zig");
@@ -10,7 +10,6 @@ const tool_chrome = @import("m_panel_tool.zig");
 
 pub const max_files = 8;
 pub const name_len = 96;
-
 pub const Phase = enum(u8) { idle, ready, armed, flashing, success, failed };
 pub const Action = enum(u8) { refresh, select, check, flash, restart };
 
@@ -19,8 +18,8 @@ pub const State = struct {
     file_count: u8 = 0,
     selected: u8 = 0,
     progress: u8 = 0,
-    c6_connected: bool = false,
-    version: [24]u8 = .{0} ** 24,
+    s3_connected: bool = false,
+    version: [32]u8 = .{0} ** 32,
     version_len: u8 = 0,
     files: [max_files][name_len]u8 = [_][name_len]u8{.{0} ** name_len} ** max_files,
     file_lens: [max_files]u8 = .{0} ** max_files,
@@ -58,7 +57,7 @@ fn cardGeom(t0: f32) geom.Rect {
     return .{ .x = @divTrunc(tokens.Logical.width - w, 2), .y = @divTrunc(tokens.Logical.height - h, 2), .w = w, .h = h };
 }
 
-fn drawDisabled(logical: *fb.LogicalFb, r: geom.Rect, label: []const u8, theme: tokens.Theme) void {
+fn disabled(logical: *fb.LogicalFb, r: geom.Rect, label: []const u8, theme: tokens.Theme) void {
     widgets.drawButton(logical, r, label, .filled, .disabled, theme);
 }
 
@@ -69,33 +68,31 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     var lay: Layout = .{};
     lay.header = tool_chrome.headerChrome(card);
     tool_chrome.paintBackToPanel(logical, theme, lay.header.back);
-    tool_chrome.paintTitle(logical, theme, lay.header.back.x + lay.header.back.w + tokens.Space.sm, lay.header.back.y, "C6 Firmware Update");
+    tool_chrome.paintTitle(logical, theme, lay.header.back.x + lay.header.back.w + tokens.Space.sm, lay.header.back.y, "S3 Firmware Update");
     tool_chrome.paintExit(logical, theme, lay.header.exit);
 
     const x = card.x + tokens.Space.lg;
     const right = card.x + card.w - tokens.Space.lg;
     var y = lay.header.back.y + lay.header.back.h + tokens.Space.md;
-    const link = if (state.c6_connected) "ESP-Hosted/SDIO connected" else "C6 not connected";
-    font.drawTextRole(logical, x, y, link, if (state.c6_connected) theme.primary else theme.on_error_container, .body_m);
-    if (state.version_len != 0) font.drawTextRole(logical, x + 270, y, state.versionText(), theme.on_surface_variant, .body_m);
+    const link = if (state.s3_connected) "S3 bridge connected via C6 / ESP-NOW" else "S3 bridge not connected";
+    font.drawTextRole(logical, x, y, link, if (state.s3_connected) theme.primary else theme.on_error_container, .body_m);
+    if (state.version_len != 0) font.drawTextRole(logical, x + 390, y, state.versionText(), theme.on_surface_variant, .body_m);
     lay.refresh = .{ .x = right - 190, .y = y - 10, .w = 190, .h = 60 };
     widgets.drawTonalButton(logical, lay.refresh, "Refresh drives", theme);
     y += tokens.Logical.touch_min + tokens.Space.sm;
 
-    const row_h: i32 = 54;
-    const row_gap: i32 = 6;
     lay.row_n = @min(state.file_count, 6);
     var i: u8 = 0;
     while (i < lay.row_n) : (i += 1) {
-        const r: geom.Rect = .{ .x = x, .y = y, .w = right - x, .h = row_h };
+        const r: geom.Rect = .{ .x = x, .y = y, .w = right - x, .h = 54 };
         lay.rows[i] = r;
         const selected = i == state.selected;
         widgets.fillRoundRect(logical, r, tokens.Shape.md, if (selected) theme.secondary_container else theme.surface_container_low);
         if (!selected) widgets.strokeRoundRect(logical, r, tokens.Shape.md, theme.outline_variant, 1);
         font.drawTextRole(logical, r.x + tokens.Space.md, r.y + 16, state.fileText(i), if (selected) theme.on_secondary_container else theme.on_surface, .body_m);
-        y += row_h + row_gap;
+        y += 60;
     }
-    if (lay.row_n == 0) font.drawTextRole(logical, x, y + 8, "No verified ESP32-C6 app images found on USB or SD.", theme.on_surface_variant, .body_m);
+    if (lay.row_n == 0) font.drawTextRole(logical, x, y + 8, "No verified ESP32-S3 app images found on USB or SD.", theme.on_surface_variant, .body_m);
 
     const status_y = card.y + card.h - 150;
     font.drawTextRole(logical, x, status_y, state.statusText(), if (state.phase == .failed) theme.on_error_container else theme.on_surface_variant, .body_m);
@@ -107,15 +104,14 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     }
 
     const action_h: i32 = 64;
-    const action_w: i32 = 230;
+    const action_w: i32 = 250;
     const by = card.y + card.h - tokens.Space.lg - action_h;
     lay.check = .{ .x = x, .y = by, .w = action_w, .h = action_h };
     lay.flash = .{ .x = x + action_w + tokens.Space.md, .y = by, .w = action_w, .h = action_h };
     lay.restart = .{ .x = right - action_w, .y = by, .w = action_w, .h = action_h };
-    const can_check = state.file_count > 0 and state.phase != .flashing;
-    if (can_check) widgets.drawFilledButton(logical, lay.check, "1. Check image", theme) else drawDisabled(logical, lay.check, "1. Check image", theme);
-    if (state.phase == .armed) widgets.drawDangerButton(logical, lay.flash, "2. Flash C6", theme) else drawDisabled(logical, lay.flash, "2. Flash C6", theme);
-    if (state.phase == .success) widgets.drawFilledButton(logical, lay.restart, "3. Restart", theme) else drawDisabled(logical, lay.restart, "3. Restart", theme);
+    if (state.file_count > 0 and state.phase != .flashing) widgets.drawFilledButton(logical, lay.check, "1. Check S3 image", theme) else disabled(logical, lay.check, "1. Check S3 image", theme);
+    if (state.phase == .armed) widgets.drawDangerButton(logical, lay.flash, "2. Flash S3", theme) else disabled(logical, lay.flash, "2. Flash S3", theme);
+    if (state.phase == .success) widgets.drawFilledButton(logical, lay.restart, "3. Restart S3", theme) else disabled(logical, lay.restart, "3. Restart S3", theme);
     return lay;
 }
 
@@ -132,7 +128,7 @@ pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
     return .{};
 }
 
-test "C6 OTA buttons meet minimum touch size" {
+test "S3 OTA controls meet minimum touch size" {
     const gpa = std.testing.allocator;
     var logical = try fb.LogicalFb.alloc(gpa);
     defer logical.deinit(gpa);
@@ -142,6 +138,4 @@ test "C6 OTA buttons meet minimum touch size" {
     try std.testing.expect(lay.check.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.flash.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.restart.h >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.refresh.h >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.rows[0].h >= tokens.Logical.touch_min);
 }

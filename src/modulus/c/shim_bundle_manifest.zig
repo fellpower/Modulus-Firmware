@@ -19,6 +19,7 @@ pub const headers = [_][]const u8{
     "serial_shim.h",
     "storage_shim.h",
     "c6_ota_shim.h",
+    "s3_ota_shim.h",
     "touch_shim.h",
     "transport_shim.h",
     "ui_shim.h",

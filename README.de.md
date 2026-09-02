@@ -6,11 +6,11 @@
   <a href="README.md">English</a> · <strong>Deutsch</strong>
 </p>
 
-# Modulus Firmware – C6-OTA für Tab5
+# Modulus Firmware – OTA für Tab5
 
 **Version:** 3.1.0  
 **Autor:** D. McLean / BufferRoot  
-**Feature-Branch:** `feature/tab5-c6-ota`  
+**Feature-Branch:** `feature/tab5-ota`
 **Plattform:** M5Stack Tab5 (ESP32-P4 + ESP32-C6)  
 **Lizenz:** [MIT](LICENSE)
 
@@ -19,24 +19,27 @@ Oberfläche und Steuerungslogik aus; der ESP32-C6 stellt WLAN, BLE und ESP-NOW
 über ESP-Hosted/SDIO bereit. Das Pendant ersetzt nicht die Maschinensteuerung
 und nicht den hardwareseitigen Not-Aus.
 
-## Warum es diesen Feature-Branch gibt
+## Warum es diesen OTA-Feature-Branch gibt
 
-Für ein C6-Update war bisher eine separate USB-/Bootloader-Verbindung zum C6
-nötig. Dieser Branch ergänzt im P4-Menü die Seite **C6 Update**. Damit lässt sich
-eine kompatible C6-Anwendungsdatei von der SD-Karte auswählen und über die
-bereits vorhandene ESP-Hosted-SDIO-Verbindung übertragen.
+Modulus verteilt seine Aufgaben auf mehrere Prozessoren. Für Updates des
+ESP32-C6 im Tab5 und der ESP32-S3-Bridge war bisher jeweils ein separater
+USB-/Bootloader-Zugang nötig. Dieser Branch ergänzt **C6 Update** und
+**S3 Update** im M Panel. C6-App-Images werden intern über ESP-Hosted/SDIO
+übertragen, S3-App-Images per ESP-NOW. Als Quelle funktionieren ein
+FAT-formatierter USB-A-Stick oder eine microSD-Karte.
 
-Der vorgesehene Ablauf lautet deshalb **zuerst P4, danach C6**: Zunächst wird
-die P4-Firmware mit dem neuen Updater installiert. Anschließend startet Modulus
-normal und aktualisiert den C6 über **M Panel → C6 Update**. Das Flashen beginnt
-niemals automatisch. Image-Prüfung, ausdrückliche Bestätigung, Fortschrittsbalken
-und Neustart-Schaltfläche sichern den Ablauf ab.
+Der Ablauf lautet **zuerst P4, danach C6 und/oder S3**. Der XIAO ESP32-S3
+benötigt einmalig das OTA-fähige Vollimage per USB; alle späteren Updates nutzen
+nur das App-Image. Beide Seiten prüfen den ESP-Chiptyp, verlangen eine bewusste
+Freigabe und starten das Ziel erst auf Tastendruck neu. Ein C6-Image kann nicht
+versehentlich über die S3-Seite geflasht werden und umgekehrt. Beide OTA-Wege
+wurden auf echter Hardware erfolgreich getestet.
 
 ## Architektur in Kurzform
 
 | Ziel | Aufgabe |
 |------|---------|
-| **ESP32-P4** | Tab5-Oberfläche, MPG und Steuerung; enthält den C6-Updater |
+| **ESP32-P4** | Tab5-Oberfläche, MPG und Steuerung; enthält C6- und S3-Updater |
 | **ESP32-C6** | WLAN, BLE und ESP-NOW über ESP-Hosted/SDIO |
 | **ESP32-S3** | ESP-NOW-Bridge im Schaltschrank zur CNC-UART |
 | **NanoH2** | Optionaler Zigbee-Koordinator |
@@ -45,8 +48,8 @@ und Neustart-Schaltfläche sichern den Ablauf ab.
 
 - ESP-IDF 6.0.1 und esptool
 - USB-Verbindung zum Tab5-P4 (Beispiel: `COM5`)
-- FAT32-formatierte SD-Karte für das C6-Update
-- Passende Builds desselben Firmwarestands für P4 und C6
+- FAT-formatierter USB-Stick (empfohlen) oder FAT32-microSD-Karte
+- Passende Builds für P4 sowie das jeweilige C6- oder S3-Ziel
 
 Die COM-Portnummer kann auf deinem Rechner abweichen.
 
@@ -54,8 +57,8 @@ Die COM-Portnummer kann auf deinem Rechner abweichen.
 
 ### 1. ESP32-P4 zuerst flashen
 
-Dieser Feature-Branch muss auf dem P4 laufen, bevor der C6 per SDIO aktualisiert
-werden kann. Baue ihn mit:
+Dieser Feature-Branch muss auf dem P4 laufen, bevor C6 oder S3 über das Tab5
+aktualisiert werden können. Baue ihn mit:
 
 ```powershell
 .\scripts\build_tab5.ps1
@@ -77,7 +80,7 @@ esptool.py --chip esp32p4 -p COM5 --before default-reset --after hard-reset writ
 ```
 
 Tab5 vollständig aus- und wieder einschalten. Warte auf das normale Dashboard
-und prüfe, ob **M Panel → C6 Update** vorhanden ist.
+und prüfe, ob **M Panel → C6 Update** und **M Panel → S3 Update** vorhanden sind.
 
 ### 2. C6-Anwendungsdatei erzeugen
 
@@ -98,15 +101,15 @@ Sie darf umbenannt werden, zum Beispiel in
 
 ### 3. ESP32-C6 über das Tab5 aktualisieren
 
-1. SD-Karte als FAT32 formatieren.
+1. USB-Stick oder SD-Karte als FAT formatieren.
 2. **Nur** `network_adapter.bin` beziehungsweise die umbenannte OTA-Datei in
-   das Stammverzeichnis der SD-Karte kopieren.
-3. SD-Karte in das laufende Tab5 einsetzen.
+   das Stammverzeichnis des Datenträgers kopieren.
+3. USB-Stick (empfohlen) oder SD-Karte in das laufende Tab5 einsetzen.
 4. **M Panel → C6 Update** öffnen.
-5. **Refresh SD** drücken, Datei auswählen und **Check image** drücken.
+5. **Refresh drives** drücken, `USB:`- oder `SD:`-Datei auswählen und **Check image** drücken.
 6. Prüfen, dass ein ESP32-C6-Application-Image erkannt und akzeptiert wird.
 7. **Flash C6** drücken und die Sicherheitsabfrage bestätigen.
-8. Während des Fortschrittsbalkens weder Strom noch SD-Karte entfernen.
+8. Während des Fortschrittsbalkens weder Strom noch Quelldatenträger entfernen.
 9. Nach erfolgreicher Aktivierung **Restart Modulus** drücken.
 10. Prüfen, ob Dashboard und C6-/ESP-NOW-Verbindung wieder verfügbar sind.
 
@@ -140,6 +143,42 @@ gedrückt halten. Danach das Tab5 vollständig neu starten.
 - **S3-Bridge:** verbindet ESP-NOW mit der UART der CNC-Steuerung.
 - **NanoH2:** optionaler Zigbee-Hub; Zigbee-Only-Firmware niemals auf den C6
   des Tab5 flashen.
+
+### S3-OTA auf einem XIAO ESP32-S3 aktivieren und testen
+
+Für OTA braucht der S3 einmalig die neue Dual-Slot-Partitionstabelle und den
+OTA-Empfänger. Das vollständige Image wird einmal per USB bei Offset `0x0`
+installiert:
+
+```powershell
+python -m esptool --chip esp32s3 -p COM8 erase-flash
+python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-xiao-s3-bridge-first-flash-for-ota.bin
+```
+
+Falls durch das Löschen die Einstellungen verloren gingen, anschließend die
+S3-MAC-Adresse und den ESP-NOW-Kanal unter **Settings → Wireless** erneut
+eintragen. Danach nur `modulus-xiao-s3-bridge-ota-app.bin` in das Stammverzeichnis
+eines FAT-formatierten USB-Sticks (empfohlen) oder der SD-Karte kopieren und
+**M Panel → S3 Update** öffnen. Datei auswählen,
+**Check S3 image**, **Flash S3** und nach erfolgreicher Prüfung **Restart S3**
+drücken. Für den ersten Test darf dasselbe App-Image noch einmal per OTA
+installiert werden.
+
+Währenddessen muss die CNC im Leerlauf bleiben; Stromversorgung und das
+Quelllaufwerk nicht entfernen. Die S3-Seite akzeptiert ausschließlich ESP32-S3-App-Images,
+die C6-Seite ausschließlich ESP32-C6-App-Images. Vollständige/zusammengeführte
+Images werden von beiden OTA-Seiten absichtlich abgewiesen und gehören nur per
+USB an Offset `0x0`.
+
+Sowohl **C6 Update** als auch **S3 Update** durchsuchen den USB-A-Massenspeicher
+und die microSD-Karte. Treffer werden mit `USB:` beziehungsweise `SD:`
+gekennzeichnet. Wenn das Gehäuse den SD-Slot verdeckt, ist USB-A der empfohlene
+Wartungsweg: FAT-formatierten Stick einstecken, kurz auf den Mount warten und
+**Refresh drives** drücken.
+
+Falls das serielle Befehlsmenü beim Start nicht sichtbar war, eine leere
+Eingabe mit Enter senden. Das Menü mit `uartping`, Konfiguration und Diagnose
+wird dann erneut ausgegeben.
 
 Die vollständige Architektur-, Build- und Entwicklerdokumentation befindet
 sich in der [englischen README](README.md).

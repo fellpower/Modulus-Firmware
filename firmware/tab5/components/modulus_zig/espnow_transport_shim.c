@@ -6,6 +6,7 @@
 #include "cnc_cmd_exports.h"
 #include "espnow_debug.h"
 #include "espnow_stack.h"
+#include "s3_ota_protocol.h"
 #include "tab5_pi4ioe.h"
 #include "transport_shim.h"
 #include "wireless_shim.h"
@@ -31,6 +32,8 @@ static uint8_t s_channel = 1;
 static bool s_encrypt;
 static modulus_espnow_stack_evt_fn s_evt_hook;
 static void *s_evt_ctx;
+static modulus_espnow_stack_evt_fn s_aux_evt_hook;
+static void *s_aux_evt_ctx;
 static SemaphoreHandle_t s_send_sem;
 static SemaphoreHandle_t s_send_lock; /* serializes senders (Core 1 CNC vs Core 0 HALT/probe) */
 static bool s_send_ok;
@@ -336,6 +339,9 @@ static void espnow_rx(const uint8_t *payload, uint16_t len, void *ctx)
     if (s_evt_hook) {
         s_evt_hook(evt, body, body_len, s_evt_ctx);
     }
+    if (s_aux_evt_hook) {
+        s_aux_evt_hook(evt, body, body_len, s_aux_evt_ctx);
+    }
 
     if (modulus_espnow_log_level() >= MODULUS_ESPNOW_LOG_VERBOSE) {
         ESP_LOGD(TAG, "rx evt 0x%02x body=%u", (unsigned)evt, (unsigned)body_len);
@@ -398,6 +404,11 @@ static void espnow_rx(const uint8_t *payload, uint16_t len, void *ctx)
         }
         break;
     case ESPNOW_EVT_RECV:
+        if (body_len >= 6 + sizeof(uint32_t)) {
+            uint32_t magic = 0;
+            memcpy(&magic, body + 6, sizeof(magic));
+            if (magic == MOD_S3_OTA_MAGIC) break;
+        }
         if (len > 7 && s_open && body_len >= 6 &&
             memcmp(body, s_peer, 6) == 0) {
             modulus_wireless_espnow_rx_inc();
@@ -426,6 +437,28 @@ void modulus_espnow_stack_set_evt_hook(modulus_espnow_stack_evt_fn fn, void *ctx
 {
     s_evt_hook = fn;
     s_evt_ctx = ctx;
+}
+
+void modulus_espnow_stack_set_aux_evt_hook(modulus_espnow_stack_evt_fn fn, void *ctx)
+{
+    s_aux_evt_hook = fn;
+    s_aux_evt_ctx = ctx;
+}
+
+bool modulus_espnow_stack_send_configured_peer(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0 || len > ESPNOW_MAX_PAYLOAD || !modulus_wireless_ready()) {
+        return false;
+    }
+    char mac_str[20];
+    uint8_t peer[6];
+    modulus_wireless_espnow_peer_mac_str(mac_str, sizeof(mac_str));
+    if (!parse_mac(mac_str, peer)) return false;
+    if (!modulus_espnow_stack_inited() &&
+        !modulus_espnow_stack_ensure_inited(MODULUS_ESPNOW_INIT_WAIT_MS)) return false;
+    const uint8_t channel = modulus_wireless_espnow_channel();
+    if (!modulus_espnow_stack_add_peer(peer, channel, false)) return false;
+    return modulus_espnow_stack_send(peer, data, len);
 }
 
 bool modulus_espnow_stack_init(void)

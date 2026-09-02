@@ -1,7 +1,9 @@
 # Firmware build outputs
 firmware/**/build/
+firmware/**/build_ota*/
 firmware/**/sdkconfig
 firmware/**/sdkconfig.old
+firmware/**/sdkconfig.ota*
 firmware/**/managed_components/
 
 # NOT dependencies.lock — it is tracked on purpose.

@@ -124,7 +124,7 @@ const PsramAllocator = struct {
 /// The vtable ignores `ptr`, but leaving it `undefined` puts an indeterminate
 /// value in a struct that gets copied around. Point it at the vtable itself.
 const psram_allocator: std.mem.Allocator = .{
-    .ptr = @constCast(@ptrCast(&PsramAllocator.vtable)),
+    .ptr = @ptrCast(@constCast(&PsramAllocator.vtable)),
     .vtable = &PsramAllocator.vtable,
 };
 
@@ -503,6 +503,7 @@ export fn modulus_zig_ui_frame() void {
         device_ui_bridge.pollPinLock(eng);
         device_ui_bridge.mirrorC6Sdio(eng);
         if (eng.c6_ota_poll_sink) |poll| poll(eng);
+        if (eng.s3_ota_poll_sink) |poll| poll(eng);
         if (eng.probe_pin_sink) |pin| {
             eng.qs_probe_trig = pin();
         }
