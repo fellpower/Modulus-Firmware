@@ -35,6 +35,22 @@ Freigabe und starten das Ziel erst auf Tastendruck neu. Ein C6-Image kann nicht
 versehentlich über die S3-Seite geflasht werden und umgekehrt. Beide OTA-Wege
 wurden auf echter Hardware erfolgreich getestet.
 
+> [!IMPORTANT]
+> **OTA muss zuerst durch einen einmaligen kabelgebundenen Flash vorbereitet
+> werden.** Zuerst das P4-Paket per USB flashen, damit das Tab5 die OTA-Menüs
+> erhält. Ein neuer oder bereits anders geflashter XIAO ESP32-S3 muss danach
+> einmal per USB bei Offset `0x0` mit
+> `modulus-xiao-s3-first-flash-for-ota-*.bin` geflasht werden. Dadurch werden
+> OTA-Empfänger und Dual-Slot-Partitionstabelle installiert. Erst anschließend
+> funktionieren spätere S3-Updates mit `modulus-xiao-s3-ota-app-*.bin` über
+> **M Panel → S3 Update**. Das First-Flash-/Vollimage niemals im OTA-Menü wählen.
+
+Beim Tab5-C6 stellt die originale ESP-Hosted-Firmware Slave-OTA bereits bereit.
+Trotzdem muss zuerst die OTA-fähige P4-Firmware installiert sein, damit
+**C6 Update** verfügbar ist. Startet der C6 nicht mehr oder antwortet nicht über
+SDIO, muss zunächst das vollständige C6-Paket über dessen USB-Bootloader
+wiederhergestellt werden.
+
 ## Architektur in Kurzform
 
 | Ziel | Aufgabe |

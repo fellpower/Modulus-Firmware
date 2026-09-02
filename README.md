@@ -36,6 +36,20 @@ Nothing is flashed automatically.
 The complete C6 and XIAO S3 OTA paths, including an S3 update from USB-A and a
 successful boot from its second OTA slot, have been verified on real hardware.
 
+> [!IMPORTANT]
+> **OTA must be enabled by a one-time wired flash first.** Flash the P4 package
+> over USB so the Tab5 has the OTA menus. A new or previously installed XIAO
+> ESP32-S3 must then be flashed once over USB at offset `0x0` with
+> `modulus-xiao-s3-first-flash-for-ota-*.bin`. This installs the OTA receiver
+> and dual-slot partition table. Only after that first flash can subsequent S3
+> updates use `modulus-xiao-s3-ota-app-*.bin` through **M Panel → S3 Update**.
+> Do not send the first-flash/full image through the OTA menu.
+
+For the Tab5 C6, the stock ESP-Hosted firmware already provides slave OTA. The
+P4 OTA-enabled firmware still has to be installed first before **C6 Update** is
+available. If the C6 no longer boots or answers over SDIO, restore its complete
+flash package over the C6 USB bootloader before using OTA again.
+
 Handheld DRO + MPG **client** on Tab5 — Zig dual-core anti-lag firmware talking to grblHAL (and other engines) over ESP-NOW or RS-485. It does not replace your motion controller.
 
 Most M5 projects cram UI and radio onto one busy chip. Modulus uses Tab5 as designed: **P4** dual-core HMI/control, **C6** for Wi-Fi/BLE/ESP-NOW, **NanoH2** for Zigbee — so motion RF and shop-IoT RF never fight.
