@@ -378,10 +378,12 @@ static void espnow_stack_evt(uint8_t evt, const uint8_t *payload, uint16_t len, 
         break;
     case ESPNOW_EVT_PEER_OK:
         if (payload && len >= 6) {
-            s_bridge_ok = true;
             char mac[20];
             modulus_wireless_espnow_format_mac(payload, mac, sizeof(mac));
-            modulus_espnow_debug_event("bridge", "peer ok %s", mac);
+            /* PEER_OK only confirms that the C6 accepted the peer in its local
+             * ESP-NOW table.  It says nothing about whether the S3 is powered
+             * or reachable, so it must never drive the UI's live state. */
+            modulus_espnow_debug_event("bridge", "peer configured %s", mac);
             if (s_peer_wait_armed) {
                 s_peer_wait_ok = true;
                 if (s_peer_sem) {
@@ -522,11 +524,19 @@ static bool espnow_apply_bridge_peer_ex(bool locate_if_dark)
     uint8_t live_ch = ch;
 
     if (!locate_if_dark) {
-        /* LVGL hal_wireless::espnow::enable — add_peer on configured channel only. */
+        /* Adding a peer only configures the C6.  Require a real MAC-layer ACK
+         * before advertising the S3 as live in the status bar. */
         if (!espnow_add_peer_wait(mac, ch, encrypt, 600)) {
             return false;
         }
-        ESP_LOGI(TAG, "Bridge peer %s ch%u (added)", mac_str, (unsigned)ch);
+        if (!modulus_espnow_stack_send_discovery(
+                mac, (const uint8_t *)"MOD_PROBE", sizeof("MOD_PROBE") - 1)) {
+            modulus_espnow_debug_event("bridge", "configured peer did not answer");
+            ESP_LOGW(TAG, "Bridge peer %s ch%u configured but not reachable",
+                     mac_str, (unsigned)ch);
+            return false;
+        }
+        ESP_LOGI(TAG, "Bridge peer %s ch%u (verified)", mac_str, (unsigned)ch);
     } else if (!espnow_verify_peer_air(mac, ch) &&
                !espnow_ping_locate_peer(mac, &live_ch)) {
         modulus_espnow_debug_event("bridge", "peer dark on all channels");
