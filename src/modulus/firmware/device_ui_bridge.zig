@@ -492,6 +492,7 @@ pub fn wirelessPoll(eng: *Engine) void {
     eng.cnc.wifi_on = w.wifi;
     eng.cnc.bt_on = w.bt;
     eng.cnc.espnow_on = w.espnow;
+    eng.cnc.espnow_bridge_ready = w.espnow and c.modulus_wireless_espnow_bridge_ready();
 }
 
 fn wirelessScanStart(eng: *Engine) void {

@@ -866,6 +866,7 @@ pub const Engine = struct {
             (@as(u32, @intFromBool(cnc.wifi_on)) << 12) |
             (@as(u32, @intFromBool(cnc.bt_on)) << 11) |
             (@as(u32, @intFromBool(cnc.espnow_on)) << 10) |
+            (@as(u32, @intFromBool(cnc.espnow_bridge_ready)) << 9) |
             (@as(u32, cnc.alarm_code) << 5) |
             (@as(u32, cnc.wcs_i) & 0x1f);
     }

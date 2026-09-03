@@ -58,6 +58,8 @@ pub const CncView = struct {
     wifi_on: bool = false,
     bt_on: bool = false,
     espnow_on: bool = false,
+    /// Device: the configured ESP-NOW S3 bridge answered the latest air probe.
+    espnow_bridge_ready: bool = false,
     /// CNC transport index — fallback when no wireless radio is on.
     conn: u8 = 4,
     unit_mm: bool = true,
@@ -494,7 +496,10 @@ fn paintStatusBar(logical: *fb.LogicalFb, theme: tokens.Theme, cnc: CncView) voi
     if (any_radio) {
         if (cnc.espnow_on) {
             rx -= ico_24;
-            icons_phosphor.drawCenteredScaled(logical, rx + @divTrunc(ico_24, 2), mid_y, .broadcast, theme.primary, ico_24);
+            // Enabled is not the same as connected: orange while the saved S3
+            // is being found/reconnected, green only after a real air reply.
+            const espnow_fg = if (cnc.espnow_bridge_ready) theme.cycle else theme.hold;
+            icons_phosphor.drawCenteredScaled(logical, rx + @divTrunc(ico_24, 2), mid_y, .broadcast, espnow_fg, ico_24);
             rx -= tokens.Space.xs;
         }
         if (cnc.bt_on) {
