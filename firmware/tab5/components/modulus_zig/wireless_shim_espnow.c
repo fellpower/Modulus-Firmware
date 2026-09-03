@@ -1311,26 +1311,55 @@ static bool boot_reconnect_once(const char *phase)
             return false;
         }
     }
-    /* Radio + C6 ESP-NOW INIT only — peer add / transport open on user Connect. */
-    modulus_espnow_debug_event("boot", "reconnect (%s): radio up, peer deferred", phase);
+    if (modulus_espnow_transport_is_open()) {
+        return true;
+    }
+
+    /* The S3 and Tab5 commonly start from the same 24 V rail. The C6 may be
+     * ready several seconds before the S3 bridge, so an added peer is not proof
+     * of a live bridge. Verify it over the air (and locate its channel if the
+     * saved channel drifted) before opening the CNC transport. */
+    if (!espnow_apply_bridge_peer_ex(true)) {
+        modulus_espnow_debug_event("boot", "reconnect (%s): bridge not ready", phase);
+        return false;
+    }
+
+    char mac[20];
+    modulus_wireless_espnow_peer_mac_str(mac, sizeof(mac));
+    const uint8_t ch = modulus_wireless_espnow_channel();
+    modulus_espnow_debug_event("boot", "reconnect (%s): light start ch%u", phase,
+                               (unsigned)ch);
+    if (!modulus_espnow_transport_start(mac, ch, false)) {
+        modulus_espnow_debug_event("boot", "reconnect (%s): transport start failed", phase);
+        return false;
+    }
+    modulus_zig_transport_espnow_attach();
+    modulus_espnow_debug_event("boot", "reconnect (%s): CNC transport open", phase);
     return true;
 }
 
-/* Slow cadence — probe is enough; avoid thrashing reinit. */
+/* Slow cadence avoids SDIO/radio thrashing while still covering a bridge that
+ * boots late, loses power independently, or restarts after an OTA update. */
+
+static volatile bool s_boot_reconnect_task_started;
 
 static void deferred_boot_reconnect_task(void *arg)
 {
     (void)arg;
-    static const uint16_t k_delays_ms[] = {3000, 8000, 15000};
-    for (int attempt = 0; attempt < (int)(sizeof(k_delays_ms) / sizeof(k_delays_ms[0]));
-         attempt++) {
-        vTaskDelay(pdMS_TO_TICKS(k_delays_ms[attempt]));
-        modulus_espnow_debug_event("boot", "reconnect retry %d/%d", attempt + 1,
-                                   (int)(sizeof(k_delays_ms) / sizeof(k_delays_ms[0])));
-        if (boot_reconnect_once("retry")) {
-            break;
+    uint32_t attempt = 0;
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    while (boot_reconnect_wanted()) {
+        if (!modulus_espnow_transport_is_open()) {
+            attempt++;
+            modulus_espnow_debug_event("boot", "automatic reconnect attempt %lu",
+                                       (unsigned long)attempt);
+            (void)boot_reconnect_once("background");
         }
+        /* Keep watching after success so an independently rebooted S3 returns
+         * without requiring Settings > Apply & connect. */
+        vTaskDelay(pdMS_TO_TICKS(modulus_espnow_transport_is_open() ? 15000 : 10000));
     }
+    s_boot_reconnect_task_started = false;
     vTaskDelete(NULL);
 }
 
@@ -1341,13 +1370,14 @@ static void schedule_bridge_reapply(void)
 
 void modulus_wireless_espnow_boot_reconnect(void)
 {
-    if (boot_reconnect_once("boot")) {
+    (void)boot_reconnect_once("boot");
+    if (!boot_reconnect_wanted() || s_boot_reconnect_task_started) {
         return;
     }
-    static bool started;
-    if (started) {
-        return;
+    s_boot_reconnect_task_started = true;
+    if (xTaskCreate(deferred_boot_reconnect_task, "espnow_boot", 4096, NULL, 3, NULL) !=
+        pdPASS) {
+        s_boot_reconnect_task_started = false;
+        modulus_espnow_debug_event("boot", "automatic reconnect task create failed");
     }
-    started = true;
-    xTaskCreate(deferred_boot_reconnect_task, "espnow_boot", 4096, NULL, 3, NULL);
 }
