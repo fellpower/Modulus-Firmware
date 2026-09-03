@@ -1347,9 +1347,34 @@ static void deferred_boot_reconnect_task(void *arg)
 {
     (void)arg;
     uint32_t attempt = 0;
+    uint8_t liveness_misses = 0;
     vTaskDelay(pdMS_TO_TICKS(3000));
     while (boot_reconnect_wanted()) {
-        if (!modulus_espnow_transport_is_open()) {
+        if (modulus_espnow_transport_is_open()) {
+            uint8_t peer[6];
+            char mac[20];
+            modulus_wireless_espnow_peer_mac_str(mac, sizeof(mac));
+            const bool parsed = modulus_wireless_espnow_parse_mac(mac, peer) &&
+                                !mac_is_broadcast(peer);
+            const bool alive = parsed && espnow_radio_usable() &&
+                               espnow_verify_peer_air(
+                                   peer, modulus_wireless_espnow_channel());
+            if (alive) {
+                liveness_misses = 0;
+                s_bridge_ok = true;
+            } else if (++liveness_misses >= 2) {
+                /* s_open is only local state; it remains true when the S3 loses
+                 * power. Two unanswered MOD_PROBEs turn that stale state into
+                 * a real disconnect, after which the loop locates/reopens it. */
+                modulus_espnow_debug_event("boot", "S3 liveness lost - close transport");
+                ESP_LOGW(TAG, "S3 bridge did not answer two liveness probes");
+                liveness_misses = 0;
+                s_bridge_ok = false;
+                s_applied_valid = false;
+                modulus_espnow_transport_stop();
+            }
+        } else {
+            liveness_misses = 0;
             attempt++;
             modulus_espnow_debug_event("boot", "automatic reconnect attempt %lu",
                                        (unsigned long)attempt);
