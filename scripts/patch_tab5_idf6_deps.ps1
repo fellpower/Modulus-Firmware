@@ -448,14 +448,6 @@ static int modulus_sdio_counter_resync(void)
             $sd = $sd2
             Write-Host "Patched host sdio_drv.c: RX counter resync v5 -> v6"
         }
-        if ($sd -notmatch '#define\s+MODULUS_SDIO_GPIO_FLUSH_MIN') {
-            $sd2 = $sd -replace '(#define MODULUS_SDIO_DRAIN_CHUNK \(16384\)[^\r\n]*)',
-                "`$1`r`n#define MODULUS_SDIO_GPIO_FLUSH_MIN (4096) /* below: align counters only, no GPIO15 */"
-            if ($sd -ne $sd2) {
-                $sd = $sd2
-                Write-Host "Patched host sdio_drv.c: MODULUS_SDIO_GPIO_FLUSH_MIN"
-            }
-        }
         # v6 poll_slave_regs + counter_resync body
         $sd2 = $sd -replace 'slave PACKET_LEN not clear after', 'slave PACKET_LEN unreadable after'
         if ($sd -ne $sd2) { $sd = $sd2 }
@@ -477,6 +469,29 @@ static int modulus_sdio_counter_resync(void)
             $sd = $sd2
             Write-Host "Patched host sdio_drv.c: RX counter resync v5 before OPEN_DATA_PATH"
         }
+    }
+
+    # Every resync installation path uses this threshold. Keep the define
+    # outside the v5->v6 migration branch so a clean component checkout gets
+    # it as well. Use a platform-neutral newline and fail early if the anchor
+    # ever changes upstream.
+    if ($sd -match 'MODULUS_SDIO_GPIO_FLUSH_MIN' -and
+        $sd -notmatch '#define\s+MODULUS_SDIO_GPIO_FLUSH_MIN') {
+        $newline = if ($sd.Contains("`r`n")) { "`r`n" } else { "`n" }
+        $sd2 = [regex]::Replace(
+            $sd,
+            '(#define\s+MODULUS_SDIO_DRAIN_CHUNK\s+\(16384\)[^\r\n]*)',
+            "`$1${newline}#define MODULUS_SDIO_GPIO_FLUSH_MIN (4096) /* below: align counters only, no GPIO15 */",
+            1)
+        if ($sd -eq $sd2) {
+            throw "Could not add MODULUS_SDIO_GPIO_FLUSH_MIN: DRAIN_CHUNK anchor missing in $sdioDrv"
+        }
+        $sd = $sd2
+        Write-Host "Patched host sdio_drv.c: MODULUS_SDIO_GPIO_FLUSH_MIN"
+    }
+    if ($sd -match 'MODULUS_SDIO_GPIO_FLUSH_MIN' -and
+        $sd -notmatch '#define\s+MODULUS_SDIO_GPIO_FLUSH_MIN') {
+        throw "Incomplete SDIO patch: MODULUS_SDIO_GPIO_FLUSH_MIN is used but not defined in $sdioDrv"
     }
 
     # Modulus: back off when register reads fail (bus down / slave re-enumerating).
