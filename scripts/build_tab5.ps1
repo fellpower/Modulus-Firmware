@@ -94,6 +94,11 @@ try {
     } else {
         Write-Host "==> skip set-target (esp32p4 sdkconfig present)"
     }
+    # A completely fresh checkout has no managed_components before set-target.
+    # Run the idempotent compatibility patch again after component resolution
+    # so first builds and subsequent builds follow the same path.
+    Write-Host "==> patch resolved ESP-IDF managed components"
+    & "$PSScriptRoot\patch_tab5_idf6_deps.ps1"
     & "$PSScriptRoot\write_flash_walltime.ps1" -RepoRoot $RepoRoot
     Write-Host "==> idf.py build"
     idf.py build
