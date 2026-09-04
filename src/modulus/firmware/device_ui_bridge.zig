@@ -593,7 +593,10 @@ pub fn wirelessCmd(eng: *Engine, cmd: ui_engine.engine.WirelessUiCmd) void {
             var pbuf: [64]u8 = undefined;
             const ssid = zTerm(&sbuf, p.ssid);
             const pass = zTerm(&pbuf, p.pass);
-            copySliceTo(eng.prefs.wireless.ssid[0..], p.ssid);
+            // `p.ssid` can already be a slice of the destination prefs buffer.
+            // Copy from our detached stack buffer so copySliceTo's leading
+            // memset cannot overlap (and trip Zig's @memcpy alias safety).
+            copySliceTo(eng.prefs.wireless.ssid[0..], ssid);
             if (!c.modulus_wireless_wifi_connect(ssid.ptr, pass.ptr)) {
                 eng.prefs.wireless.wifi_connecting = false;
                 eng.showSnackbarError("Wi-Fi connect failed — C6 / SDIO");
