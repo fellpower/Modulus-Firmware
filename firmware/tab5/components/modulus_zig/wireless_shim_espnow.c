@@ -1373,15 +1373,16 @@ static void deferred_boot_reconnect_task(void *arg)
                 liveness_misses = 0;
                 s_bridge_ok = true;
             } else if (++liveness_misses >= 2) {
-                /* s_open is only local state; it remains true when the S3 loses
-                 * power. Two unanswered MOD_PROBEs turn that stale state into
-                 * a real disconnect, after which the loop locates/reopens it. */
-                modulus_espnow_debug_event("boot", "S3 liveness lost - close transport");
-                ESP_LOGW(TAG, "S3 bridge did not answer two liveness probes");
+                /* Background MAC-layer ACK misses are not proof that the CNC
+                 * session is dead. Closing the transport here caused an idle
+                 * pendant to disconnect until the next operator action. Keep
+                 * the transparent CNC transport open; real traffic still
+                 * closes it through the normal TX-failure path. */
+                modulus_espnow_debug_event("boot", "S3 liveness not confirmed - keep transport open");
+                ESP_LOGW(TAG, "S3 bridge did not answer two liveness probes; keeping CNC transport open");
                 liveness_misses = 0;
                 s_bridge_ok = false;
                 s_applied_valid = false;
-                modulus_espnow_transport_stop();
             }
         } else {
             liveness_misses = 0;
