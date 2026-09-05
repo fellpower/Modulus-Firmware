@@ -5804,6 +5804,10 @@ pub const Engine = struct {
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.zigbee)) {
                 self.handleZigbeeClick(x, y);
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.c6_update)) {
+                if (self.m_panel_c6_ota_state.phase == .flashing or self.m_panel_c6_ota_state.phase == .success) {
+                    self.requestFull();
+                    return;
+                }
                 const h = m_panel_c6_ota.hit(self.m_panel_c6_ota_layout, x, y);
                 switch (h.kind) {
                     .none => {},

@@ -79,7 +79,8 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     font.drawTextRole(logical, x, y, link, if (state.c6_connected) theme.primary else theme.on_error_container, .body_m);
     if (state.version_len != 0) font.drawTextRole(logical, x + 270, y, state.versionText(), theme.on_surface_variant, .body_m);
     lay.refresh = .{ .x = right - 190, .y = y - 10, .w = 190, .h = 60 };
-    widgets.drawTonalButton(logical, lay.refresh, "Refresh USB", theme);
+    const locked = state.phase == .flashing or state.phase == .success;
+    if (locked) drawDisabled(logical, lay.refresh, "Refresh USB", theme) else widgets.drawTonalButton(logical, lay.refresh, "Refresh USB", theme);
     y += tokens.Logical.touch_min + tokens.Space.sm;
 
     const row_h: i32 = 54;
@@ -112,10 +113,10 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     lay.check = .{ .x = x, .y = by, .w = action_w, .h = action_h };
     lay.flash = .{ .x = x + action_w + tokens.Space.md, .y = by, .w = action_w, .h = action_h };
     lay.restart = .{ .x = right - action_w, .y = by, .w = action_w, .h = action_h };
-    const can_check = state.file_count > 0 and state.phase != .flashing;
+    const can_check = state.file_count > 0 and !locked;
     if (can_check) widgets.drawFilledButton(logical, lay.check, "1. Check image", theme) else drawDisabled(logical, lay.check, "1. Check image", theme);
     if (state.phase == .armed) widgets.drawDangerButton(logical, lay.flash, "2. Flash C6", theme) else drawDisabled(logical, lay.flash, "2. Flash C6", theme);
-    if (state.phase == .success) widgets.drawFilledButton(logical, lay.restart, "3. Restart", theme) else drawDisabled(logical, lay.restart, "3. Restart", theme);
+    if (state.phase == .success) drawDisabled(logical, lay.restart, "Restarting...", theme) else drawDisabled(logical, lay.restart, "3. Restart", theme);
     return lay;
 }
 

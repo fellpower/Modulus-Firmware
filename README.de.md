@@ -34,8 +34,9 @@ microSD-Funktionen von Modulus bleiben unverändert.
 
 Der Ablauf lautet **zuerst P4, danach C6 und/oder S3**. Der XIAO ESP32-S3
 benötigt einmalig das OTA-fähige Vollimage per USB; alle späteren Updates nutzen
-nur das App-Image. Beide Seiten prüfen den ESP-Chiptyp, verlangen eine bewusste
-Freigabe und starten das Ziel erst auf Tastendruck neu. Ein C6-Image kann nicht
+nur das App-Image. Beide Seiten prüfen den ESP-Chiptyp und verlangen eine bewusste
+Freigabe. Nach erfolgreicher C6-Aktivierung startet der P4 nach drei Sekunden
+automatisch neu, um ESP-Hosted/SDIO wieder zu synchronisieren. Ein C6-Image kann nicht
 versehentlich über die S3-Seite geflasht werden und umgekehrt. Beide OTA-Wege
 wurden auf echter Hardware erfolgreich getestet.
 
@@ -130,7 +131,8 @@ Sie darf umbenannt werden, zum Beispiel in
 6. Prüfen, dass ein ESP32-C6-Application-Image erkannt und akzeptiert wird.
 7. **Flash C6** drücken und die Sicherheitsabfrage bestätigen.
 8. Während des Fortschrittsbalkens weder Strom noch Quelldatenträger entfernen.
-9. Nach erfolgreicher Aktivierung **Restart Modulus** drücken.
+9. Nach erfolgreicher Aktivierung den automatischen Drei-Sekunden-Countdown
+   abwarten. Das Tab5 startet selbstständig neu.
 10. Prüfen, ob Dashboard und C6-/ESP-NOW-Verbindung wieder verfügbar sind.
 
 > [!WARNING]

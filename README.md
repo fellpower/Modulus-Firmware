@@ -34,7 +34,9 @@ The maintenance sequence is **P4 first, then C6 and/or S3**: install the P4
 firmware containing the OTA UI, boot Modulus normally, and select the matching
 updater. The XIAO ESP32-S3 needs the OTA-capable full image once over USB; later
 updates use only its application image. Image inspection, explicit arming,
-progress feedback, and a separate restart action keep every write deliberate.
+progress feedback, and a guarded restart keep every write deliberate. After a
+successful C6 activation, the P4 restarts automatically after three seconds to
+resynchronize the ESP-Hosted/SDIO link.
 Nothing is flashed automatically.
 
 The complete C6 and XIAO S3 OTA paths, including an S3 update from USB-A and a
@@ -253,7 +255,8 @@ It may be renamed to a descriptive name such as
    compatibility check.
 7. Select **Flash C6** and confirm the warning. Do not remove power or the
    source drive while the progress bar is moving.
-8. After activation succeeds, select **Restart Modulus**. Confirm that the
+8. After activation succeeds, wait for the automatic three-second countdown.
+   Modulus restarts itself to resynchronize with the C6. Confirm that the
    dashboard returns and the C6/ESP-NOW connection is available.
 
 > [!WARNING]
@@ -401,8 +404,8 @@ from this repository, that application is
 image header and ESP32-C6 chip ID before enabling **Flash C6**.
 
 Flashing never starts automatically. Keep power and the USB drive connected while
-the progress bar is active. After successful activation, **Restart Modulus** is
-enabled so the P4 can reboot and reconnect to the updated C6 firmware.
+the progress bar is active. After successful activation, the P4 automatically
+restarts after three seconds so it can reconnect to the updated C6 firmware.
 
 Use an ESP-Hosted slave application image compatible with the host component
 version pinned in `firmware/tab5/dependencies.lock`. Do not use a full-flash,

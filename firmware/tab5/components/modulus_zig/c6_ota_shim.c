@@ -23,6 +23,7 @@
 #define OTA_USB_ROOT "/usb"
 #define OTA_CHUNK_SIZE 4096
 #define OTA_MAX_IMAGE_SIZE (4U * 1024U * 1024U)
+#define OTA_HOST_RESTART_DELAY_MS 3000
 
 static const char *TAG = "c6_ota";
 static modulus_c6_ota_snapshot_t s_state = {
@@ -234,8 +235,12 @@ static void ota_worker(void *arg)
         s_state.phase = MODULUS_C6_OTA_SUCCESS;
         s_state.progress = 100;
         s_state.c6_connected = false;
-        snprintf(s_state.status, sizeof(s_state.status), "C6 firmware activated successfully. Restart Modulus to reconnect.");
+        snprintf(s_state.status, sizeof(s_state.status), "C6 updated successfully. Modulus will restart in 3 seconds.");
         taskEXIT_CRITICAL(&s_lock);
+        ESP_LOGW(TAG, "C6 firmware activated; restarting P4 in %u ms to resync ESP-Hosted/SDIO",
+                 OTA_HOST_RESTART_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(OTA_HOST_RESTART_DELAY_MS));
+        esp_restart();
     } else {
         char msg[MODULUS_C6_OTA_STATUS_LEN];
         snprintf(msg, sizeof(msg), "C6 update failed at %u/%u bytes: %s. The image was not activated.",
