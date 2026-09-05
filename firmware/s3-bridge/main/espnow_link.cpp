@@ -53,6 +53,7 @@ static QueueHandle_t         s_inbound_q = nullptr;
 static QueueHandle_t         s_outbound_q = nullptr;
 static bool                  s_inbound_worker_started = false;
 static bool                  s_outbound_worker_started = false;
+static bool                  s_heartbeat_task_started = false;
 /* MOD_ACK / peer learn must not block inside esp_now recv cb. */
 static portMUX_TYPE          s_ack_spin = portMUX_INITIALIZER_UNLOCKED;
 static bool                  s_ack_pending = false;
@@ -465,6 +466,17 @@ void espnow_flush_pending_ack()
     flush_pending_mod_ack();
 }
 
+static void heartbeat_task(void*)
+{
+    static const uint8_t heartbeat[] = BRIDGE_MOD_HEARTBEAT;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        /* Side-band liveness only: never enters either UART queue. The normal
+         * ESP-NOW TX mutex serializes it with CNC traffic and OTA packets. */
+        (void)espnow_send_to_tab5(heartbeat, BRIDGE_MOD_HEARTBEAT_LEN);
+    }
+}
+
 void espnow_start_inbound_worker()
 {
     if (s_inbound_q && !s_inbound_worker_started) {
@@ -476,6 +488,14 @@ void espnow_start_inbound_worker()
         xTaskCreatePinnedToCore(outbound_worker, "espnow_out",
                                 4096, nullptr, 6, nullptr, 1);
         s_outbound_worker_started = true;
+    }
+    if (!s_heartbeat_task_started) {
+        if (xTaskCreatePinnedToCore(heartbeat_task, "espnow_hb",
+                                    3072, nullptr, 4, nullptr, 1) == pdPASS) {
+            s_heartbeat_task_started = true;
+        } else {
+            ESP_LOGW(TAG, "heartbeat task create failed");
+        }
     }
 }
 

@@ -404,6 +404,10 @@ static void espnow_rx(const uint8_t *payload, uint16_t len, void *ctx)
         }
         break;
     case ESPNOW_EVT_RECV:
+        /* S3 liveness is consumed locally and must never reach grblHAL. */
+        if (body_len == 6 + 7 && memcmp(body + 6, "MOD_HB1", 7) == 0) {
+            break;
+        }
         if (body_len >= 6 + sizeof(uint32_t)) {
             uint32_t magic = 0;
             memcpy(&magic, body + 6, sizeof(magic));

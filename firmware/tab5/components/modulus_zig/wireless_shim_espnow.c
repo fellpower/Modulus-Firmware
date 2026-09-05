@@ -27,6 +27,9 @@ static bool s_espnow_on;
 static uint32_t s_en_tx;
 static uint32_t s_en_rx;
 static bool s_bridge_ok;
+static volatile TickType_t s_last_bridge_rx_tick;
+static uint8_t s_configured_bridge_mac[6];
+static bool s_configured_bridge_mac_valid;
 
 static portMUX_TYPE s_en_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_scan_active;
@@ -374,6 +377,11 @@ static void espnow_stack_evt(uint8_t evt, const uint8_t *payload, uint16_t len, 
     case ESPNOW_EVT_RECV:
         if (payload && len >= 6) {
             scan_note_peer(payload, 0);
+            if (s_configured_bridge_mac_valid &&
+                memcmp(payload, s_configured_bridge_mac, 6) == 0) {
+                s_last_bridge_rx_tick = xTaskGetTickCount();
+                s_bridge_ok = true;
+            }
         }
         break;
     case ESPNOW_EVT_PEER_OK:
@@ -496,9 +504,12 @@ static bool espnow_apply_bridge_peer_ex(bool locate_if_dark)
     modulus_wireless_espnow_peer_mac_str(mac_str, sizeof(mac_str));
     if (!modulus_wireless_espnow_parse_mac(mac_str, mac) || mac_is_broadcast(mac)) {
         s_bridge_ok = false;
+        s_configured_bridge_mac_valid = false;
         s_applied_valid = false;
         return false;
     }
+    memcpy(s_configured_bridge_mac, mac, sizeof(s_configured_bridge_mac));
+    s_configured_bridge_mac_valid = true;
 
     modulus_espnow_stack_register();
     if (!modulus_espnow_stack_inited()) {
@@ -1369,7 +1380,10 @@ static void deferred_boot_reconnect_task(void *arg)
             const bool alive = parsed && espnow_radio_usable() &&
                                espnow_verify_peer_air(
                                    peer, modulus_wireless_espnow_channel());
-            if (alive) {
+            const TickType_t now = xTaskGetTickCount();
+            const bool recent_rx = s_last_bridge_rx_tick != 0 &&
+                (now - s_last_bridge_rx_tick) <= pdMS_TO_TICKS(30000);
+            if (alive || recent_rx) {
                 liveness_misses = 0;
                 s_bridge_ok = true;
             } else if (++liveness_misses >= 2) {
