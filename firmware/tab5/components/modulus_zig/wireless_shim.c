@@ -105,6 +105,8 @@ void modulus_wireless_radio_op_give(void)
 
 static portMUX_TYPE s_wifi_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_wifi_enabled = false;
+/* User intent is distinct from the STA interface required by ESP-NOW. */
+static bool s_wifi_requested = false;
 static bool s_wifi_connected = false;
 static bool s_wifi_connecting = false;
 static bool s_user_disconnect = false;
@@ -461,12 +463,21 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_i
         case WIFI_EVENT_STA_CONNECTED: {
             wifi_event_sta_connected_t *ev = event_data;
             taskENTER_CRITICAL(&s_wifi_mux);
-            s_wifi_enabled = true;
-            s_wifi_connecting = true;
-            if (ev && ev->ssid[0]) {
-                strncpy(s_wifi_ssid, (const char *)ev->ssid, sizeof(s_wifi_ssid) - 1);
+            const bool requested = s_wifi_requested;
+            if (requested) {
+                s_wifi_enabled = true;
+                s_wifi_connecting = true;
+                if (ev && ev->ssid[0]) {
+                    strncpy(s_wifi_ssid, (const char *)ev->ssid, sizeof(s_wifi_ssid) - 1);
+                }
             }
             taskEXIT_CRITICAL(&s_wifi_mux);
+            if (!requested) {
+                ESP_LOGW(TAG, "Rejecting unsolicited AP connection while Wi-Fi radio is disabled");
+                s_user_disconnect = true;
+                (void)esp_wifi_disconnect();
+                break;
+            }
             modulus_wireless_espnow_check_channel_conflict();
             break;
         }
@@ -881,6 +892,7 @@ static void wifi_enable_worker(void *arg)
         return;
     }
     taskENTER_CRITICAL(&s_wifi_mux);
+    s_wifi_requested = true;
     s_wifi_enabled = true;
     taskEXIT_CRITICAL(&s_wifi_mux);
     modulus_nvs_set_u8("wifi", 1);
@@ -901,6 +913,9 @@ bool modulus_wireless_wifi_enable(void)
     if (!s_ready) {
         return false;
     }
+    taskENTER_CRITICAL(&s_wifi_mux);
+    s_wifi_requested = true;
+    taskEXIT_CRITICAL(&s_wifi_mux);
     if (s_wifi_enable_busy) {
         return true; /* already starting */
     }
@@ -916,6 +931,9 @@ bool modulus_wireless_wifi_enable(void)
 
 void modulus_wireless_wifi_disable(void)
 {
+    taskENTER_CRITICAL(&s_wifi_mux);
+    s_wifi_requested = false;
+    taskEXIT_CRITICAL(&s_wifi_mux);
     s_user_disconnect = true;
     esp_wifi_disconnect();
     modulus_wireless_espnow_on_wifi_stop();
@@ -987,6 +1005,7 @@ static void wifi_scan_worker(void *arg)
 
     if (!s_wifi_enabled && !s_wifi_enable_busy) {
         taskENTER_CRITICAL(&s_wifi_mux);
+        s_wifi_requested = true;
         s_wifi_enabled = true;
         taskEXIT_CRITICAL(&s_wifi_mux);
         modulus_nvs_set_u8("wifi", 1);
@@ -1140,6 +1159,7 @@ bool modulus_wireless_wifi_connect(const char *ssid, const char *pass)
     }
     s_user_disconnect = false;
     taskENTER_CRITICAL(&s_wifi_mux);
+    s_wifi_requested = true;
     s_wifi_enabled = true;
     s_wifi_connecting = true;
     s_wifi_disc_reason = 0;
