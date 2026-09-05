@@ -150,7 +150,7 @@ static void activity_led_pulse_rx()
     led_pulse(static_cast<gpio_num_t>(s_led_rx), s_led_rx_timer);
 }
 
-static void save_config();
+static bool save_config();
 
 static void load_config()
 {
@@ -172,12 +172,12 @@ static void load_config()
     int32_t gpio = 0;
     const int def_tx = s_tx_gpio;
     const int def_rx = s_rx_gpio;
-    if (have_board && nvs_get_i32(h, NVS_KEY_TX_GPIO, &gpio) == ESP_OK && gpio >= 0) {
-        if (gpio == 17) { s_tx_gpio = def_tx; migrated = true; }
+    if (nvs_get_i32(h, NVS_KEY_TX_GPIO, &gpio) == ESP_OK && gpio >= 0) {
+        if (have_board && gpio == 17) { s_tx_gpio = def_tx; migrated = true; }
         else s_tx_gpio = static_cast<int>(gpio);
     }
-    if (have_board && nvs_get_i32(h, NVS_KEY_RX_GPIO, &gpio) == ESP_OK && gpio >= 0) {
-        if (gpio == 18) { s_rx_gpio = def_rx; migrated = true; }
+    if (nvs_get_i32(h, NVS_KEY_RX_GPIO, &gpio) == ESP_OK && gpio >= 0) {
+        if (have_board && gpio == 18) { s_rx_gpio = def_rx; migrated = true; }
         else s_rx_gpio = static_cast<int>(gpio);
     }
 
@@ -199,10 +199,10 @@ static void load_config()
     }
 }
 
-static void save_config()
+static bool save_config()
 {
     bridge_nvs_t nvs = bridge_nvs_open(NVS_READWRITE);
-    if (!nvs.ok) return;
+    if (!nvs.ok) return false;
     esp_err_t err = nvs_set_u32(nvs.h, NVS_KEY_BAUD, s_baud);
     if (err == ESP_OK) err = nvs_set_i32(nvs.h, NVS_KEY_TX_GPIO, static_cast<int32_t>(s_tx_gpio));
     if (err == ESP_OK) err = nvs_set_i32(nvs.h, NVS_KEY_RX_GPIO, static_cast<int32_t>(s_rx_gpio));
@@ -217,6 +217,7 @@ static void save_config()
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "save_config: %s", esp_err_to_name(err));
     }
+    return err == ESP_OK;
 }
 
 static void uart_install(uint32_t baud, int tx, int rx)
@@ -370,20 +371,30 @@ void uart_bridge_send(const uint8_t* data, size_t len)
     activity_led_pulse_tx();
 }
 
-void uart_bridge_reinit(uint32_t baud, int tx_gpio, int rx_gpio)
+bool uart_bridge_reinit(uint32_t baud, int tx_gpio, int rx_gpio)
 {
     s_rx_paused.store(true, std::memory_order_release);
     vTaskDelay(pdMS_TO_TICKS(kReinitPauseMs));
 
+    const uint32_t old_baud = s_baud;
+    const int old_tx_gpio = s_tx_gpio;
+    const int old_rx_gpio = s_rx_gpio;
     s_baud    = baud;
     s_tx_gpio = tx_gpio;
     s_rx_gpio = rx_gpio;
-    save_config();
+    if (!save_config()) {
+        s_baud = old_baud;
+        s_tx_gpio = old_tx_gpio;
+        s_rx_gpio = old_rx_gpio;
+        s_rx_paused.store(false, std::memory_order_release);
+        return false;
+    }
     uart_install(s_baud, s_tx_gpio, s_rx_gpio);
 
     s_rx_paused.store(false, std::memory_order_release);
     ESP_LOGI(TAG, "UART reconfigured: %lu baud TX=%d RX=%d",
              static_cast<unsigned long>(s_baud), s_tx_gpio, s_rx_gpio);
+    return true;
 }
 
 void uart_bridge_mpg_activate()

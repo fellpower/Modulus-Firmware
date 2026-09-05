@@ -5766,10 +5766,13 @@ pub const Engine = struct {
             _ = self.emitWireless(.zb_refresh);
         }
         if (index == @intFromEnum(m_panel.ToolId.c6_update)) {
+            self.m_panel_c6_ota_state.view = .dashboard;
             if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
         }
         if (index == @intFromEnum(m_panel.ToolId.s3_update)) {
+            self.m_panel_s3_ota_state.view = .dashboard;
             if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
         }
         if (index == @intFromEnum(m_panel.ToolId.terminal) and self.m_panel_term_auto_scroll) {
             self.terminalFollowTail();
@@ -5813,6 +5816,8 @@ pub const Engine = struct {
                     .none => {},
                     .scrim, .back => self.returnToMPanelFromTool(),
                     .exit => self.closeToolToDashboard(),
+                    .detail_back => self.m_panel_c6_ota_state.view = .dashboard,
+                    .firmware => self.m_panel_c6_ota_state.view = .firmware,
                     .refresh => if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0),
                     .row => if (self.c6_ota_cmd_sink) |sink| sink(self, .select, h.index),
                     .check => if (self.m_panel_c6_ota_state.file_count > 0 and self.m_panel_c6_ota_state.phase != .flashing) {
@@ -5825,11 +5830,27 @@ pub const Engine = struct {
                 self.requestFull();
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.s3_update)) {
                 const h = m_panel_s3_ota.hit(self.m_panel_s3_ota_layout, x, y);
+                if (self.m_panel_s3_ota_state.view == .review) {
+                    switch (h.kind) {
+                        .cancel => self.m_panel_s3_ota_state.view = .settings,
+                        .apply => if (!self.m_panel_s3_ota_state.config_busy) {
+                            self.m_panel_s3_ota_state.view = .settings;
+                            if (self.s3_ota_cmd_sink) |sink| sink(self, .config_apply, 0);
+                        },
+                        .exit => self.closeToolToDashboard(),
+                        else => {},
+                    }
+                    self.requestFull();
+                    return;
+                }
                 switch (h.kind) {
                     .none => {},
                     .scrim, .back => self.returnToMPanelFromTool(),
                     .exit => self.closeToolToDashboard(),
-                    .refresh => if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0),
+                    .detail_back => self.m_panel_s3_ota_state.view = .dashboard,
+                    .refresh => if (self.s3_ota_cmd_sink) |sink| {
+                        if (self.m_panel_s3_ota_state.view == .settings) sink(self, .config_refresh, 0) else sink(self, .refresh, 0);
+                    },
                     .row => if (self.s3_ota_cmd_sink) |sink| sink(self, .select, h.index),
                     .check => if (self.m_panel_s3_ota_state.file_count > 0 and self.m_panel_s3_ota_state.phase != .flashing) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .check, 0);
@@ -5840,6 +5861,36 @@ pub const Engine = struct {
                     .restart => if (self.m_panel_s3_ota_state.phase == .success) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .restart, 0);
                     },
+                    .firmware => self.m_panel_s3_ota_state.view = .firmware,
+                    .settings => {
+                        self.m_panel_s3_ota_state.view = .settings;
+                        self.m_panel_s3_ota_state.config_loaded = false;
+                        if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
+                    },
+                    .tx_minus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_tx > 0) {
+                        self.m_panel_s3_ota_state.draft_tx -= 1;
+                    },
+                    .tx_plus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_tx < 48) {
+                        self.m_panel_s3_ota_state.draft_tx += 1;
+                    },
+                    .rx_minus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_rx > 0) {
+                        self.m_panel_s3_ota_state.draft_rx -= 1;
+                    },
+                    .rx_plus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_rx < 48) {
+                        self.m_panel_s3_ota_state.draft_rx += 1;
+                    },
+                    .baud => if (self.m_panel_s3_ota_state.config_supported) {
+                        self.m_panel_s3_ota_state.draft_baud = switch (self.m_panel_s3_ota_state.draft_baud) {
+                            115200 => 230400,
+                            230400 => 460800,
+                            460800 => 921600,
+                            else => 115200,
+                        };
+                    },
+                    .review => if (self.m_panel_s3_ota_state.config_supported and !self.m_panel_s3_ota_state.config_busy) {
+                        self.m_panel_s3_ota_state.view = .review;
+                    },
+                    .cancel, .apply => {},
                 }
                 self.requestFull();
             } else if (m_panel.hitTool(self.m_panel_tool_layout, x, y)) {

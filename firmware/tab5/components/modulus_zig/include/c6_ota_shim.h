@@ -28,6 +28,7 @@ typedef struct {
     uint8_t progress;
     bool c6_connected;
     char c6_version[24];
+    char image_version[32];
     char files[MODULUS_C6_OTA_MAX_FILES][MODULUS_C6_OTA_NAME_LEN];
     char status[MODULUS_C6_OTA_STATUS_LEN];
 } modulus_c6_ota_snapshot_t;

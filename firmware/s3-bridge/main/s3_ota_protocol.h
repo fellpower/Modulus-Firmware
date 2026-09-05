@@ -16,6 +16,8 @@ typedef enum {
     MOD_S3_OTA_END    = 4,
     MOD_S3_OTA_ABORT  = 5,
     MOD_S3_OTA_REBOOT = 6,
+    MOD_S3_CTRL_GET_UART = 7,
+    MOD_S3_CTRL_SET_UART = 8,
     MOD_S3_OTA_REPLY  = 0x80,
 } mod_s3_ota_type_t;
 
@@ -26,6 +28,8 @@ typedef enum {
     MOD_S3_OTA_BAD_IMAGE,
     MOD_S3_OTA_FLASH_ERROR,
     MOD_S3_OTA_BUSY,
+    MOD_S3_OTA_BAD_CONFIG,
+    MOD_S3_OTA_NVS_ERROR,
 } mod_s3_ota_status_t;
 
 #pragma pack(push, 1)
@@ -46,7 +50,21 @@ typedef struct {
     uint8_t status;
     uint16_t reserved;
     char app_version[32];
+    uint8_t capabilities;
+    int8_t uart_tx_gpio;
+    int8_t uart_rx_gpio;
+    uint8_t reserved2;
+    uint32_t uart_baud;
 } mod_s3_ota_reply_t;
+
+typedef struct {
+    int8_t tx_gpio;
+    int8_t rx_gpio;
+    uint16_t reserved;
+    uint32_t baud;
+} mod_s3_uart_config_t;
 #pragma pack(pop)
+
+#define MOD_S3_CAP_UART_CONFIG 0x01U
 
 #define MOD_S3_OTA_HEADER_SIZE ((uint16_t)offsetof(mod_s3_ota_packet_t, payload))

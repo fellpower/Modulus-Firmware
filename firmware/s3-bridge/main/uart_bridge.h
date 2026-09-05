@@ -11,7 +11,7 @@ extern "C" {
 void     uart_bridge_init();
 
 /* Re-initialise UART after a baud/GPIO change (from shell) */
-void     uart_bridge_reinit(uint32_t baud, int tx_gpio, int rx_gpio);
+bool     uart_bridge_reinit(uint32_t baud, int tx_gpio, int rx_gpio);
 
 /* (Re-)send 0x8B to activate MPG mode on grblHAL Flexi-HAL */
 void     uart_bridge_mpg_activate();

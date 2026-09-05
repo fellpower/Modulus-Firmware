@@ -33,8 +33,8 @@ pub const tools = [_]Tool{
     .{ .label = "Probe", .icon = .arrow_down },
     .{ .label = "SD Card", .icon = .hard_drives },
     .{ .label = "Zigbee", .icon = .broadcast },
-    .{ .label = "C6 Update", .icon = .cpu },
-    .{ .label = "S3 Update", .icon = .cpu },
+    .{ .label = "C6", .icon = .cpu },
+    .{ .label = "S3", .icon = .cpu },
 };
 
 pub fn toolEnabled(index: u8, usb_host: bool) bool {

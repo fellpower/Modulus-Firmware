@@ -1,5 +1,7 @@
 #include "s3_ota.h"
 #include "s3_ota_protocol.h"
+#include "bridge_board.h"
+#include "uart_bridge.h"
 
 #include <cstdio>
 #include <cstring>
@@ -10,6 +12,7 @@
 #include <esp_log.h>
 #include <esp_ota_ops.h>
 #include <esp_system.h>
+#include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -33,6 +36,26 @@ static uint32_t s_written;
 static uint32_t s_last_payload_crc;
 static uint16_t s_last_payload_len;
 static bool s_active;
+
+static bool baud_valid(uint32_t baud)
+{
+    return baud == 115200 || baud == 230400 || baud == 460800 || baud == 921600;
+}
+
+static bool pin_reserved(int gpio)
+{
+    if (gpio == 0 || gpio == 19 || gpio == 20 || (gpio >= 26 && gpio <= 37) ||
+        gpio == 45 || gpio == 46) return true;
+    const bridge_board_t *board = bridge_board_get();
+    return board && (gpio == board->led_tx || gpio == board->led_rx || gpio == board->halt);
+}
+
+static bool uart_config_valid(const mod_s3_uart_config_t *cfg)
+{
+    if (!cfg || cfg->tx_gpio == cfg->rx_gpio || !baud_valid(cfg->baud)) return false;
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(cfg->tx_gpio) || !GPIO_IS_VALID_GPIO(cfg->rx_gpio)) return false;
+    return !pin_reserved(cfg->tx_gpio) && !pin_reserved(cfg->rx_gpio);
+}
 
 static void reset_session(bool abort_flash)
 {
@@ -64,6 +87,10 @@ static void send_reply(const uint8_t mac[6], const mod_s3_ota_packet_t *request,
     reply.status = status;
     const esp_app_desc_t *desc = esp_app_get_description();
     if (desc) snprintf(reply.app_version, sizeof(reply.app_version), "%s", desc->version);
+    reply.capabilities = MOD_S3_CAP_UART_CONFIG;
+    reply.uart_tx_gpio = (int8_t)uart_bridge_tx_gpio();
+    reply.uart_rx_gpio = (int8_t)uart_bridge_rx_gpio();
+    reply.uart_baud = uart_bridge_baud();
     packet.payload_len = sizeof(reply);
     memcpy(packet.payload, &reply, sizeof(reply));
     (void)s_send(mac, reinterpret_cast<const uint8_t *>(&packet),
@@ -174,6 +201,23 @@ static void ota_worker(void *)
             send_reply(item.mac, packet, MOD_S3_OTA_OK);
             xTaskCreate(reboot_task, "s3_reboot", 2048, nullptr, 4, nullptr);
             continue;
+        case MOD_S3_CTRL_GET_UART:
+            break;
+        case MOD_S3_CTRL_SET_UART: {
+            if (packet->payload_len != sizeof(mod_s3_uart_config_t)) {
+                status = MOD_S3_OTA_BAD_PACKET;
+                break;
+            }
+            mod_s3_uart_config_t cfg = {};
+            memcpy(&cfg, packet->payload, sizeof(cfg));
+            if (!uart_config_valid(&cfg)) {
+                status = MOD_S3_OTA_BAD_CONFIG;
+                break;
+            }
+            if (!uart_bridge_reinit(cfg.baud, cfg.tx_gpio, cfg.rx_gpio))
+                status = MOD_S3_OTA_NVS_ERROR;
+            break;
+        }
         default:
             status = MOD_S3_OTA_BAD_PACKET;
             break;

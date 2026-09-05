@@ -21,7 +21,7 @@
 #define ESPNOW_TX_WAIT_MS        200
 
 #define UART_PORT_NUM            UART_NUM_1
-#define UART_DEFAULT_BAUD        921600
+#define UART_DEFAULT_BAUD        115200
 #define UART_RTS_GPIO            (-1)
 #define UART_CTS_GPIO            (-1)
 #define UART_RX_BUF_SIZE         (16384)

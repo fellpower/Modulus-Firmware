@@ -1307,13 +1307,17 @@ fn copyC6Text(dst: []u8, src: anytype) u8 {
 fn c6OtaPoll(eng: *Engine) void {
     var snap: c.modulus_c6_ota_snapshot_t = undefined;
     c.modulus_c6_ota_get_snapshot(&snap);
-    var next: ui_engine.m_panel_c6_ota.State = .{};
+    // Preserve UI-only navigation state while refreshing the hardware snapshot.
+    // Reinitialising State here would force the C6 detail page back to its
+    // default dashboard view on every poll.
+    var next = eng.m_panel_c6_ota_state;
     next.phase = @enumFromInt(@min(@as(u8, @intCast(snap.phase)), @intFromEnum(ui_engine.m_panel_c6_ota.Phase.failed)));
     next.file_count = @min(@as(u8, @intCast(snap.file_count)), ui_engine.m_panel_c6_ota.max_files);
     next.selected = @min(@as(u8, @intCast(snap.selected)), if (next.file_count > 0) next.file_count - 1 else 0);
     next.progress = @min(@as(u8, @intCast(snap.progress)), 100);
     next.c6_connected = snap.c6_connected;
     next.version_len = copyC6Text(next.version[0..], snap.c6_version);
+    next.image_version_len = copyC6Text(next.image_version[0..], snap.image_version);
     next.status_len = copyC6Text(next.status[0..], snap.status);
     var i: usize = 0;
     while (i < next.file_count) : (i += 1) next.file_lens[i] = copyC6Text(next.files[i][0..], snap.files[i]);
@@ -1336,13 +1340,27 @@ fn c6OtaCmd(eng: *Engine, action: ui_engine.m_panel_c6_ota.Action, index: u8) vo
 fn s3OtaPoll(eng: *Engine) void {
     var snap: c.modulus_s3_ota_snapshot_t = undefined;
     c.modulus_s3_ota_get_snapshot(&snap);
-    var next: ui_engine.m_panel_s3_ota.State = .{};
+    var next = eng.m_panel_s3_ota_state;
     next.phase = @enumFromInt(@min(@as(u8, @intCast(snap.phase)), @intFromEnum(ui_engine.m_panel_s3_ota.Phase.failed)));
     next.file_count = @min(@as(u8, @intCast(snap.file_count)), ui_engine.m_panel_s3_ota.max_files);
     next.selected = @min(@as(u8, @intCast(snap.selected)), if (next.file_count > 0) next.file_count - 1 else 0);
     next.progress = @min(@as(u8, @intCast(snap.progress)), 100);
     next.s3_connected = snap.s3_connected;
+    next.config_supported = snap.uart_config_supported;
+    next.config_busy = snap.uart_config_busy;
+    next.uart_tx = snap.uart_tx_gpio;
+    next.uart_rx = snap.uart_rx_gpio;
+    next.uart_baud = snap.uart_baud;
+    if (snap.uart_config_supported and !next.config_loaded) {
+        next.draft_tx = snap.uart_tx_gpio;
+        next.draft_rx = snap.uart_rx_gpio;
+        next.draft_baud = snap.uart_baud;
+        next.config_loaded = true;
+    } else if (!snap.uart_config_supported) {
+        next.config_loaded = false;
+    }
     next.version_len = copyC6Text(next.version[0..], snap.s3_version);
+    next.image_version_len = copyC6Text(next.image_version[0..], snap.image_version);
     next.status_len = copyC6Text(next.status[0..], snap.status);
     var i: usize = 0;
     while (i < next.file_count) : (i += 1) next.file_lens[i] = copyC6Text(next.files[i][0..], snap.files[i]);
@@ -1359,6 +1377,12 @@ fn s3OtaCmd(eng: *Engine, action: ui_engine.m_panel_s3_ota.Action, index: u8) vo
         .check => c.modulus_s3_ota_arm_selected(),
         .flash => c.modulus_s3_ota_start(),
         .restart => c.modulus_s3_ota_restart(),
+        .config_refresh => c.modulus_s3_uart_config_refresh(),
+        .config_apply => c.modulus_s3_uart_config_apply(
+            eng.m_panel_s3_ota_state.draft_tx,
+            eng.m_panel_s3_ota_state.draft_rx,
+            eng.m_panel_s3_ota_state.draft_baud,
+        ),
     }
     s3OtaPoll(eng);
 }

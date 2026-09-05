@@ -35,6 +35,7 @@ static bool s_worker_running;
 static char s_armed_path[192];
 static size_t s_armed_size;
 static char s_file_paths[MODULUS_C6_OTA_MAX_FILES][192];
+static char s_file_versions[MODULUS_C6_OTA_MAX_FILES][32];
 
 static void state_status(modulus_c6_ota_phase_t phase, const char *text)
 {
@@ -67,6 +68,7 @@ static esp_err_t inspect_image(const char *path, size_t *size_out, esp_app_desc_
 
 static bool scan_root(modulus_c6_ota_snapshot_t *next,
                       char paths[MODULUS_C6_OTA_MAX_FILES][192],
+                      char versions[MODULUS_C6_OTA_MAX_FILES][32],
                       const char *root, const char *label)
 {
     DIR *dir = opendir(root);
@@ -82,6 +84,7 @@ static bool scan_root(modulus_c6_ota_snapshot_t *next,
         const uint8_t index = next->file_count;
         snprintf(next->files[index], sizeof(next->files[index]), "%.3s: %.90s", label, entry->d_name);
         snprintf(paths[index], sizeof(paths[index]), "%s", path);
+        snprintf(versions[index], sizeof(versions[index]), "%s", image_desc.version);
         next->file_count++;
     }
     closedir(dir);
@@ -132,7 +135,9 @@ void modulus_c6_ota_refresh(void)
                  (unsigned long)ver.major1, (unsigned long)ver.minor1, (unsigned long)ver.patch1);
     }
     char paths[MODULUS_C6_OTA_MAX_FILES][192] = {{0}};
-    const bool usb_open = usb_mounted && scan_root(&next, paths, OTA_USB_ROOT, "USB");
+    char versions[MODULUS_C6_OTA_MAX_FILES][32] = {{0}};
+    const bool usb_open = usb_mounted && scan_root(&next, paths, versions, OTA_USB_ROOT, "USB");
+    if (next.file_count > 0) snprintf(next.image_version, sizeof(next.image_version), "%s", versions[0]);
     if (!next.c6_connected) {
         next.phase = MODULUS_C6_OTA_ERROR;
         snprintf(next.status, sizeof(next.status), "C6 is not responding over ESP-Hosted/SDIO.");
@@ -147,6 +152,7 @@ void modulus_c6_ota_refresh(void)
     taskENTER_CRITICAL(&s_lock);
     s_state = next;
     memcpy(s_file_paths, paths, sizeof(s_file_paths));
+    memcpy(s_file_versions, versions, sizeof(s_file_versions));
     s_armed_path[0] = 0;
     s_armed_size = 0;
     taskEXIT_CRITICAL(&s_lock);
@@ -158,6 +164,7 @@ void modulus_c6_ota_select(uint8_t index)
     if (!s_worker_running && index < s_state.file_count) {
         s_state.selected = index;
         s_state.phase = MODULUS_C6_OTA_READY;
+        snprintf(s_state.image_version, sizeof(s_state.image_version), "%s", s_file_versions[index]);
         snprintf(s_state.status, sizeof(s_state.status), "Selected %s. Check the image before flashing.", s_state.files[index]);
         s_armed_path[0] = 0;
         s_armed_size = 0;
