@@ -72,7 +72,7 @@ static void reset_session(bool abort_flash)
 }
 
 static void send_reply(const uint8_t mac[6], const mod_s3_ota_packet_t *request,
-                       mod_s3_ota_status_t status)
+                       mod_s3_ota_status_t status, mod_s3_uart_test_result_t test_result)
 {
     if (!s_send || !request) return;
     mod_s3_ota_packet_t packet = {};
@@ -87,10 +87,11 @@ static void send_reply(const uint8_t mac[6], const mod_s3_ota_packet_t *request,
     reply.status = status;
     const esp_app_desc_t *desc = esp_app_get_description();
     if (desc) snprintf(reply.app_version, sizeof(reply.app_version), "%s", desc->version);
-    reply.capabilities = MOD_S3_CAP_UART_CONFIG;
+    reply.capabilities = MOD_S3_CAP_UART_CONFIG | MOD_S3_CAP_UART_TEST;
     reply.uart_tx_gpio = (int8_t)uart_bridge_tx_gpio();
     reply.uart_rx_gpio = (int8_t)uart_bridge_rx_gpio();
     reply.uart_baud = uart_bridge_baud();
+    reply.uart_test_result = test_result;
     packet.payload_len = sizeof(reply);
     memcpy(packet.payload, &reply, sizeof(reply));
     (void)s_send(mac, reinterpret_cast<const uint8_t *>(&packet),
@@ -182,6 +183,7 @@ static void ota_worker(void *)
         if (xQueueReceive(s_queue, &item, portMAX_DELAY) != pdTRUE) continue;
         const mod_s3_ota_packet_t *packet = reinterpret_cast<const mod_s3_ota_packet_t *>(item.bytes);
         mod_s3_ota_status_t status = MOD_S3_OTA_OK;
+        mod_s3_uart_test_result_t test_result = MOD_S3_UART_TEST_NOT_RUN;
         switch (packet->type) {
         case MOD_S3_OTA_PROBE:
             break;
@@ -198,7 +200,7 @@ static void ota_worker(void *)
             reset_session(true);
             break;
         case MOD_S3_OTA_REBOOT:
-            send_reply(item.mac, packet, MOD_S3_OTA_OK);
+            send_reply(item.mac, packet, MOD_S3_OTA_OK, MOD_S3_UART_TEST_NOT_RUN);
             xTaskCreate(reboot_task, "s3_reboot", 2048, nullptr, 4, nullptr);
             continue;
         case MOD_S3_CTRL_GET_UART:
@@ -218,11 +220,14 @@ static void ota_worker(void *)
                 status = MOD_S3_OTA_NVS_ERROR;
             break;
         }
+        case MOD_S3_CTRL_TEST_UART:
+            test_result = static_cast<mod_s3_uart_test_result_t>(uart_bridge_test_grbl(1500));
+            break;
         default:
             status = MOD_S3_OTA_BAD_PACKET;
             break;
         }
-        send_reply(item.mac, packet, status);
+        send_reply(item.mac, packet, status, test_result);
     }
 }
 

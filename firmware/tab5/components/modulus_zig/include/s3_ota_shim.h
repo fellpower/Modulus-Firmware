@@ -27,6 +27,7 @@ typedef struct {
     uint8_t progress;
     bool s3_connected;
     bool uart_config_supported;
+    bool uart_test_supported;
     bool uart_config_busy;
     int8_t uart_tx_gpio;
     int8_t uart_rx_gpio;
@@ -45,6 +46,7 @@ void modulus_s3_ota_restart(void);
 void modulus_s3_ota_get_snapshot(modulus_s3_ota_snapshot_t *out);
 void modulus_s3_uart_config_refresh(void);
 void modulus_s3_uart_config_apply(int8_t tx_gpio, int8_t rx_gpio, uint32_t baud);
+void modulus_s3_uart_test(void);
 
 #ifdef __cplusplus
 }

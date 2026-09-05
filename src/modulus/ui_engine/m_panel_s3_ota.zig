@@ -12,7 +12,7 @@ const icons = @import("icons_phosphor.zig");
 pub const max_files = 8;
 pub const name_len = 96;
 pub const Phase = enum(u8) { idle, ready, armed, flashing, success, failed };
-pub const Action = enum(u8) { refresh, select, check, flash, restart, config_refresh, config_apply };
+pub const Action = enum(u8) { refresh, select, check, flash, restart, config_refresh, config_apply, config_test };
 pub const View = enum(u8) { dashboard, firmware, settings, review };
 
 pub const State = struct {
@@ -31,6 +31,7 @@ pub const State = struct {
     status_len: u8 = 0,
     view: View = .dashboard,
     config_supported: bool = false,
+    test_supported: bool = false,
     config_busy: bool = false,
     config_loaded: bool = false,
     uart_tx: i8 = -1,
@@ -55,7 +56,7 @@ pub const State = struct {
     }
 };
 
-pub const Hit = enum { none, scrim, back, exit, detail_back, firmware, settings, refresh, row, check, flash, restart, tx_minus, tx_plus, rx_minus, rx_plus, baud, review, cancel, apply };
+pub const Hit = enum { none, scrim, back, exit, detail_back, firmware, settings, refresh, row, check, flash, restart, tx_minus, tx_plus, rx_minus, rx_plus, baud, test_cnc, review, cancel, apply };
 pub const HitInfo = struct { kind: Hit = .none, index: u8 = 0 };
 pub const Layout = struct {
     header: tool_chrome.Header = .{},
@@ -73,6 +74,7 @@ pub const Layout = struct {
     rx_minus: geom.Rect = .{},
     rx_plus: geom.Rect = .{},
     baud: geom.Rect = .{},
+    test_cnc: geom.Rect = .{},
     review: geom.Rect = .{},
     cancel: geom.Rect = .{},
     apply: geom.Rect = .{},
@@ -251,9 +253,18 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
         widgets.drawTonalButton(logical, lay.baud, baud_txt, theme);
         y += 120;
         font.drawTextRole(logical, x, y, state.statusText(), theme.on_surface_variant, .body_m);
-        lay.refresh = .{ .x = x, .y = card.y + card.h - 90, .w = 280, .h = 64 };
-        lay.review = .{ .x = right - 300, .y = card.y + card.h - 90, .w = 300, .h = 64 };
+        const action_y = card.y + card.h - 90;
+        const action_w: i32 = 270;
+        lay.refresh = .{ .x = x, .y = action_y, .w = action_w, .h = 64 };
+        lay.test_cnc = .{ .x = x + @divTrunc((right - x) - action_w, 2), .y = action_y, .w = action_w, .h = 64 };
+        lay.review = .{ .x = right - action_w, .y = action_y, .w = action_w, .h = 64 };
         if (!state.config_busy) widgets.drawTonalButton(logical, lay.refresh, "Refresh from S3", theme) else disabled(logical, lay.refresh, "Refreshing...", theme);
+        if (state.test_supported and !state.config_busy)
+            widgets.drawTonalButton(logical, lay.test_cnc, "Test CNC connection", theme)
+        else if (state.config_busy)
+            disabled(logical, lay.test_cnc, "Testing...", theme)
+        else
+            disabled(logical, lay.test_cnc, "Update S3 to test", theme);
         if (!state.config_busy) widgets.drawFilledButton(logical, lay.review, "Review & Apply", theme) else disabled(logical, lay.review, "Applying...", theme);
         if (state.view == .review) {
             const box: geom.Rect = .{ .x = card.x + 270, .y = card.y + 125, .w = 680, .h = 430 };
@@ -353,6 +364,7 @@ pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
     if (layout.rx_minus.contains(x, y)) return .{ .kind = .rx_minus };
     if (layout.rx_plus.contains(x, y)) return .{ .kind = .rx_plus };
     if (layout.baud.contains(x, y)) return .{ .kind = .baud };
+    if (layout.test_cnc.contains(x, y)) return .{ .kind = .test_cnc };
     if (layout.review.contains(x, y)) return .{ .kind = .review };
     if (layout.cancel.contains(x, y)) return .{ .kind = .cancel };
     if (layout.apply.contains(x, y)) return .{ .kind = .apply };
@@ -420,6 +432,7 @@ test "S3 settings and confirmation controls meet minimum touch size" {
     try std.testing.expect(lay.rx_minus.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.rx_plus.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.baud.h >= tokens.Logical.touch_min);
+    try std.testing.expect(lay.test_cnc.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.review.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.refresh.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.detail_back.h >= tokens.Logical.touch_min);

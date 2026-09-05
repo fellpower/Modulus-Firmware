@@ -19,6 +19,18 @@ void     uart_bridge_mpg_activate();
 /* Queue bytes for UART TX → grblHAL (ESP-NOW worker or shell) */
 void     uart_bridge_send(const uint8_t* data, size_t len);
 
+typedef enum {
+    UART_BRIDGE_TEST_NOT_RUN = 0,
+    UART_BRIDGE_TEST_GRBL_OK,
+    UART_BRIDGE_TEST_DATA_UNRECOGNIZED,
+    UART_BRIDGE_TEST_NO_RESPONSE,
+    UART_BRIDGE_TEST_TX_ERROR,
+    UART_BRIDGE_TEST_BUSY,
+} uart_bridge_test_result_t;
+
+/* Send one harmless grbl realtime status query and classify the response. */
+uart_bridge_test_result_t uart_bridge_test_grbl(uint32_t timeout_ms);
+
 /* Runtime tunables (persisted in NVS) */
 uint32_t uart_bridge_batch_ms();
 void     uart_bridge_set_batch_ms(uint32_t ms);

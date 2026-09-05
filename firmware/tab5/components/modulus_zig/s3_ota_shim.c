@@ -125,7 +125,8 @@ static void ota_event(uint8_t evt, const uint8_t *body, uint16_t len, void *ctx)
     if (evt != ESPNOW_EVT_RECV || !body || len < 6 + MOD_S3_OTA_HEADER_SIZE) return;
     const mod_s3_ota_packet_t *packet = (const mod_s3_ota_packet_t *)(body + 6);
     if (packet->magic != MOD_S3_OTA_MAGIC || packet->version != MOD_S3_OTA_VERSION ||
-        packet->type != MOD_S3_OTA_REPLY || packet->payload_len < sizeof(mod_s3_ota_reply_t) ||
+        packet->type != MOD_S3_OTA_REPLY ||
+        packet->payload_len < offsetof(mod_s3_ota_reply_t, uart_test_result) ||
         len != 6 + MOD_S3_OTA_HEADER_SIZE + packet->payload_len) return;
     const mod_s3_ota_reply_t *reply = (const mod_s3_ota_reply_t *)packet->payload;
     if (reply->command != s_wait_command || packet->session != s_wait_session ||
@@ -177,8 +178,14 @@ static bool probe_s3(char *version, size_t version_len)
 
 static bool reply_has_uart_config(const mod_s3_ota_reply_t *reply)
 {
-    return reply && s_reply_payload_len >= sizeof(mod_s3_ota_reply_t) &&
+    return reply && s_reply_payload_len >= offsetof(mod_s3_ota_reply_t, uart_test_result) &&
            (reply->capabilities & MOD_S3_CAP_UART_CONFIG) != 0;
+}
+
+static bool reply_has_uart_test(const mod_s3_ota_reply_t *reply)
+{
+    return reply && s_reply_payload_len >= sizeof(mod_s3_ota_reply_t) &&
+           (reply->capabilities & MOD_S3_CAP_UART_TEST) != 0;
 }
 
 static bool read_uart_config(int8_t *tx, int8_t *rx, uint32_t *baud)
@@ -215,6 +222,10 @@ void modulus_s3_ota_refresh(void)
     if (next.s3_connected) {
         next.uart_config_supported = read_uart_config(
             &next.uart_tx_gpio, &next.uart_rx_gpio, &next.uart_baud);
+        if (next.uart_config_supported) {
+            const mod_s3_ota_reply_t *reply = (const mod_s3_ota_reply_t *)s_reply_packet.payload;
+            next.uart_test_supported = reply_has_uart_test(reply);
+        }
     }
     char paths[MODULUS_S3_OTA_MAX_FILES][192] = {{0}};
     char versions[MODULUS_S3_OTA_MAX_FILES][32] = {{0}};
@@ -253,6 +264,10 @@ void modulus_s3_uart_config_refresh(void)
     s_state.s3_connected = ok || s_state.s3_connected;
     s_state.uart_config_supported = ok;
     if (ok) {
+        const mod_s3_ota_reply_t *reply = (const mod_s3_ota_reply_t *)s_reply_packet.payload;
+        s_state.uart_test_supported = reply_has_uart_test(reply);
+    }
+    if (ok) {
         s_state.uart_tx_gpio = tx;
         s_state.uart_rx_gpio = rx;
         s_state.uart_baud = baud;
@@ -286,6 +301,7 @@ void modulus_s3_uart_config_apply(int8_t tx_gpio, int8_t rx_gpio, uint32_t baud)
     if (replied && status == MOD_S3_OTA_OK) {
         const mod_s3_ota_reply_t *reply = (const mod_s3_ota_reply_t *)s_reply_packet.payload;
         s_state.uart_config_supported = reply_has_uart_config(reply);
+        s_state.uart_test_supported = reply_has_uart_test(reply);
         s_state.uart_tx_gpio = reply->uart_tx_gpio;
         s_state.uart_rx_gpio = reply->uart_rx_gpio;
         s_state.uart_baud = reply->uart_baud;
@@ -298,6 +314,72 @@ void modulus_s3_uart_config_apply(int8_t tx_gpio, int8_t rx_gpio, uint32_t baud)
         snprintf(s_state.status, sizeof(s_state.status), "S3 did not confirm the UART settings; nothing changed.");
     }
     taskEXIT_CRITICAL(&s_lock);
+}
+
+static void uart_test_worker(void *arg)
+{
+    (void)arg;
+    mod_s3_ota_packet_t packet = {0};
+    packet.magic = MOD_S3_OTA_MAGIC;
+    packet.version = MOD_S3_OTA_VERSION;
+    packet.type = MOD_S3_CTRL_TEST_UART;
+    packet.session = esp_random();
+    mod_s3_ota_status_t status = MOD_S3_OTA_BUSY;
+    const bool replied = send_wait(&packet, &status);
+    taskENTER_CRITICAL(&s_lock);
+    s_state.uart_config_busy = false;
+    if (!replied || status != MOD_S3_OTA_OK) {
+        snprintf(s_state.status, sizeof(s_state.status),
+                 "S3 did not complete the CNC connection test.");
+    } else if (reply_has_uart_test((const mod_s3_ota_reply_t *)s_reply_packet.payload)) {
+        const mod_s3_ota_reply_t *reply = (const mod_s3_ota_reply_t *)s_reply_packet.payload;
+        switch ((mod_s3_uart_test_result_t)reply->uart_test_result) {
+        case MOD_S3_UART_TEST_GRBL_OK:
+            snprintf(s_state.status, sizeof(s_state.status),
+                     "CNC detected: valid grblHAL status response received.");
+            break;
+        case MOD_S3_UART_TEST_DATA_UNRECOGNIZED:
+            snprintf(s_state.status, sizeof(s_state.status),
+                     "UART data received, but not recognized as grblHAL. Check baud rate.");
+            break;
+        case MOD_S3_UART_TEST_NO_RESPONSE:
+            snprintf(s_state.status, sizeof(s_state.status),
+                     "No CNC response. Check power, GND, TX/RX pins and baud rate.");
+            break;
+        case MOD_S3_UART_TEST_TX_ERROR:
+            snprintf(s_state.status, sizeof(s_state.status),
+                     "S3 could not transmit the grblHAL status query.");
+            break;
+        default:
+            snprintf(s_state.status, sizeof(s_state.status),
+                     "CNC test is busy or returned an unknown result.");
+            break;
+        }
+    } else {
+        snprintf(s_state.status, sizeof(s_state.status),
+                 "Update the S3 firmware to enable the CNC connection test.");
+    }
+    taskEXIT_CRITICAL(&s_lock);
+    vTaskDelete(NULL);
+}
+
+void modulus_s3_uart_test(void)
+{
+    taskENTER_CRITICAL(&s_lock);
+    if (s_state.uart_config_busy || !s_state.uart_test_supported) {
+        taskEXIT_CRITICAL(&s_lock);
+        return;
+    }
+    s_state.uart_config_busy = true;
+    snprintf(s_state.status, sizeof(s_state.status),
+             "Testing CNC UART with a harmless grblHAL status query...");
+    taskEXIT_CRITICAL(&s_lock);
+    if (xTaskCreate(uart_test_worker, "s3_uart_test", 4096, NULL, 4, NULL) != pdPASS) {
+        taskENTER_CRITICAL(&s_lock);
+        s_state.uart_config_busy = false;
+        snprintf(s_state.status, sizeof(s_state.status), "Could not start the CNC connection test.");
+        taskEXIT_CRITICAL(&s_lock);
+    }
 }
 
 void modulus_s3_ota_select(uint8_t index)

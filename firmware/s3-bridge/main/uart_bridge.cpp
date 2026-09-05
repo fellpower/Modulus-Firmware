@@ -42,6 +42,10 @@ static std::atomic<uint32_t> s_bytes_tx{0};
 static std::atomic<uint32_t> s_bytes_rx{0};
 static std::atomic<uint32_t> s_uart_tx_fails{0};
 static std::atomic<uint32_t> s_rx_overruns{0};
+static std::atomic<bool>     s_probe_active{false};
+static std::atomic<bool>     s_probe_any_data{false};
+static std::atomic<bool>     s_probe_open{false};
+static std::atomic<bool>     s_probe_valid{false};
 
 static QueueHandle_t s_uart_evt = nullptr;
 
@@ -323,6 +327,15 @@ static void uart_rx_task(void* arg)
         if (n <= 0) continue;
 
         s_bytes_rx.fetch_add(static_cast<uint32_t>(n), std::memory_order_relaxed);
+        if (s_probe_active.load(std::memory_order_acquire)) {
+            s_probe_any_data.store(true, std::memory_order_release);
+            bool open = s_probe_open.load(std::memory_order_relaxed);
+            for (int i = 0; i < n; ++i) {
+                if (buf[i] == '<') open = true;
+                else if (open && buf[i] == '>') s_probe_valid.store(true, std::memory_order_release);
+            }
+            s_probe_open.store(open, std::memory_order_relaxed);
+        }
         activity_led_pulse_rx();
         (void)espnow_queue_to_tab5(buf, static_cast<size_t>(n));
     }
@@ -395,6 +408,32 @@ bool uart_bridge_reinit(uint32_t baud, int tx_gpio, int rx_gpio)
     ESP_LOGI(TAG, "UART reconfigured: %lu baud TX=%d RX=%d",
              static_cast<unsigned long>(s_baud), s_tx_gpio, s_rx_gpio);
     return true;
+}
+
+uart_bridge_test_result_t uart_bridge_test_grbl(uint32_t timeout_ms)
+{
+    bool expected = false;
+    if (!s_probe_active.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        return UART_BRIDGE_TEST_BUSY;
+    s_probe_any_data.store(false, std::memory_order_relaxed);
+    s_probe_open.store(false, std::memory_order_relaxed);
+    s_probe_valid.store(false, std::memory_order_relaxed);
+    const uint32_t failures_before = s_uart_tx_fails.load(std::memory_order_relaxed);
+    static const uint8_t status_query = '?';
+    uart_bridge_send(&status_query, 1);
+    if (s_uart_tx_fails.load(std::memory_order_relaxed) != failures_before) {
+        s_probe_active.store(false, std::memory_order_release);
+        return UART_BRIDGE_TEST_TX_ERROR;
+    }
+    const int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
+    while (esp_timer_get_time() < deadline && !s_probe_valid.load(std::memory_order_acquire))
+        vTaskDelay(pdMS_TO_TICKS(20));
+    const bool valid = s_probe_valid.load(std::memory_order_acquire);
+    const bool any_data = s_probe_any_data.load(std::memory_order_acquire);
+    s_probe_active.store(false, std::memory_order_release);
+    if (valid) return UART_BRIDGE_TEST_GRBL_OK;
+    if (any_data) return UART_BRIDGE_TEST_DATA_UNRECOGNIZED;
+    return UART_BRIDGE_TEST_NO_RESPONSE;
 }
 
 void uart_bridge_mpg_activate()

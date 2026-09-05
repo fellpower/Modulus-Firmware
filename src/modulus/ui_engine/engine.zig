@@ -5887,6 +5887,9 @@ pub const Engine = struct {
                             else => 115200,
                         };
                     },
+                    .test_cnc => if (self.m_panel_s3_ota_state.test_supported and !self.m_panel_s3_ota_state.config_busy) {
+                        if (self.s3_ota_cmd_sink) |sink| sink(self, .config_test, 0);
+                    },
                     .review => if (self.m_panel_s3_ota_state.config_supported and !self.m_panel_s3_ota_state.config_busy) {
                         self.m_panel_s3_ota_state.view = .review;
                     },

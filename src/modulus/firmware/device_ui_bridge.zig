@@ -1347,6 +1347,7 @@ fn s3OtaPoll(eng: *Engine) void {
     next.progress = @min(@as(u8, @intCast(snap.progress)), 100);
     next.s3_connected = snap.s3_connected;
     next.config_supported = snap.uart_config_supported;
+    next.test_supported = snap.uart_test_supported;
     next.config_busy = snap.uart_config_busy;
     next.uart_tx = snap.uart_tx_gpio;
     next.uart_rx = snap.uart_rx_gpio;
@@ -1383,6 +1384,7 @@ fn s3OtaCmd(eng: *Engine, action: ui_engine.m_panel_s3_ota.Action, index: u8) vo
             eng.m_panel_s3_ota_state.draft_rx,
             eng.m_panel_s3_ota_state.draft_baud,
         ),
+        .config_test => c.modulus_s3_uart_test(),
     }
     s3OtaPoll(eng);
 }
