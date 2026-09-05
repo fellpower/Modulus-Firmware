@@ -262,10 +262,3 @@ void modulus_c6_ota_start(void)
         state_status(MODULUS_C6_OTA_ERROR, "Could not start the C6 update worker.");
     }
 }
-
-void modulus_c6_ota_restart(void)
-{
-    modulus_c6_ota_snapshot_t snap;
-    modulus_c6_ota_get_snapshot(&snap);
-    if (snap.phase == MODULUS_C6_OTA_SUCCESS) esp_restart();
-}

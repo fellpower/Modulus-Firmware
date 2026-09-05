@@ -36,7 +36,6 @@ void modulus_c6_ota_refresh(void);
 void modulus_c6_ota_select(uint8_t index);
 void modulus_c6_ota_arm_selected(void);
 void modulus_c6_ota_start(void);
-void modulus_c6_ota_restart(void);
 void modulus_c6_ota_get_snapshot(modulus_c6_ota_snapshot_t *out);
 
 #ifdef __cplusplus

@@ -1329,7 +1329,6 @@ fn c6OtaCmd(eng: *Engine, action: ui_engine.m_panel_c6_ota.Action, index: u8) vo
         .select => c.modulus_c6_ota_select(index),
         .check => c.modulus_c6_ota_arm_selected(),
         .flash => c.modulus_c6_ota_start(),
-        .restart => c.modulus_c6_ota_restart(),
     }
     c6OtaPoll(eng);
 }

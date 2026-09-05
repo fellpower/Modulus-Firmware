@@ -12,7 +12,7 @@ pub const max_files = 8;
 pub const name_len = 96;
 
 pub const Phase = enum(u8) { idle, ready, armed, flashing, success, failed };
-pub const Action = enum(u8) { refresh, select, check, flash, restart };
+pub const Action = enum(u8) { refresh, select, check, flash };
 
 pub const State = struct {
     phase: Phase = .idle,
@@ -39,7 +39,7 @@ pub const State = struct {
     }
 };
 
-pub const Hit = enum { none, scrim, back, exit, refresh, row, check, flash, restart };
+pub const Hit = enum { none, scrim, back, exit, refresh, row, check, flash };
 pub const HitInfo = struct { kind: Hit = .none, index: u8 = 0 };
 pub const Layout = struct {
     header: tool_chrome.Header = .{},
@@ -48,7 +48,6 @@ pub const Layout = struct {
     row_n: u8 = 0,
     check: geom.Rect = .{},
     flash: geom.Rect = .{},
-    restart: geom.Rect = .{},
 };
 
 fn cardGeom(t0: f32) geom.Rect {
@@ -112,11 +111,9 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     const by = card.y + card.h - tokens.Space.lg - action_h;
     lay.check = .{ .x = x, .y = by, .w = action_w, .h = action_h };
     lay.flash = .{ .x = x + action_w + tokens.Space.md, .y = by, .w = action_w, .h = action_h };
-    lay.restart = .{ .x = right - action_w, .y = by, .w = action_w, .h = action_h };
     const can_check = state.file_count > 0 and !locked;
     if (can_check) widgets.drawFilledButton(logical, lay.check, "1. Check image", theme) else drawDisabled(logical, lay.check, "1. Check image", theme);
     if (state.phase == .armed) widgets.drawDangerButton(logical, lay.flash, "2. Flash C6", theme) else drawDisabled(logical, lay.flash, "2. Flash C6", theme);
-    if (state.phase == .success) drawDisabled(logical, lay.restart, "Restarting...", theme) else drawDisabled(logical, lay.restart, "3. Restart", theme);
     return lay;
 }
 
@@ -129,7 +126,6 @@ pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
     while (i < layout.row_n) : (i += 1) if (layout.rows[i].contains(x, y)) return .{ .kind = .row, .index = i };
     if (layout.check.contains(x, y)) return .{ .kind = .check };
     if (layout.flash.contains(x, y)) return .{ .kind = .flash };
-    if (layout.restart.contains(x, y)) return .{ .kind = .restart };
     return .{};
 }
 
@@ -142,7 +138,6 @@ test "C6 OTA buttons meet minimum touch size" {
     const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
     try std.testing.expect(lay.check.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.flash.h >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.restart.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.refresh.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.rows[0].h >= tokens.Logical.touch_min);
 }

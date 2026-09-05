@@ -5821,9 +5821,6 @@ pub const Engine = struct {
                     .flash => if (self.m_panel_c6_ota_state.phase == .armed) {
                         if (self.c6_ota_cmd_sink) |sink| sink(self, .flash, 0);
                     },
-                    .restart => if (self.m_panel_c6_ota_state.phase == .success) {
-                        if (self.c6_ota_cmd_sink) |sink| sink(self, .restart, 0);
-                    },
                 }
                 self.requestFull();
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.s3_update)) {
