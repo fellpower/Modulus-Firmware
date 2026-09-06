@@ -241,7 +241,12 @@ pub fn loadPrefs(p: *settings_prefs.Prefs) void {
 
     p.power.setDimFromSec(getU16(keys.dim_to, p.power.dimSec()));
     p.power.setScrFromSec(getU16(keys.scr_to, p.power.scrSec()));
-    p.power.ext5v = getU8(keys.ext5v, @intFromBool(p.power.ext5v)) != 0;
+    // Port A powers the MPG handwheel. A persisted off state used to survive
+    // firmware updates and made jogging appear broken even though CNC and
+    // ESP-NOW were connected. EXT5V is therefore a boot-on rail: it may still
+    // be switched off temporarily for diagnostics, but never starts off.
+    p.power.ext5v = true;
+    setU8(keys.ext5v, 1);
     p.power.usb5v = getU8(keys.usb5v, @intFromBool(p.power.usb5v)) != 0;
     p.power.pwr_mode = getU8(keys.pwr_mode, p.power.pwr_mode);
     p.power.setDstoFromSec(getU16(keys.pwr_dsto, p.power.dstoSec()));

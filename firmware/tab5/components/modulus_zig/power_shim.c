@@ -158,6 +158,12 @@ void modulus_power_apply_rails(void)
 
 void modulus_power_init(void)
 {
+    /* Port A hosts the MPG handwheel.  Always restore its 5 V rail at boot so
+     * a stale persisted power-toggle cannot silently disable all jog input.
+     * The toggle remains useful for live diagnostics, but it is intentionally
+     * not carried across a restart. */
+    modulus_nvs_set_u8("ext5v", 1);
+
     s_sleep_mode = modulus_nvs_get_u8("pwr_mode", 0);
     s_deep_sleep_to = modulus_nvs_get_u16("pwr_dsto", 120);
     s_wake_sources = modulus_nvs_get_u8("pwr_wake", 0x01);

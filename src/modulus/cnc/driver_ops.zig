@@ -35,7 +35,10 @@ pub fn applyOverridePct(eng: *Engine, feed: bool, target_pct: u8) void {
 
 pub fn applyOverrideDelta(drv: anytype, feed: bool, delta: i8) void {
     drv.reloadLimits();
-    if (drv.isReady()) {
+    // Realtime overrides remain valid while grblHAL reports its remote MPG
+    // input active.  `isReady()` excludes `.mpg_blocked`, which made the UI
+    // step optimistically and then snap back on the next Ov status report.
+    if (drv.canSendCommands()) {
         drv.lockSnapshot();
         // FS/RPM in status are usually *actual* (already × override). Recover programmed base
         // so envelope clamp does not pin override at 100% while cutting near max feed.

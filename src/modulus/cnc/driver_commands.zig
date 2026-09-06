@@ -9,7 +9,7 @@ const driver_ops = @import("driver_ops.zig");
 const gating = @import("driver_gating.zig");
 
 pub fn cmdCycleStart(drv: anytype) void {
-    if (gating.isReady(drv)) {
+    if (gating.canSendCommands(drv)) {
         drv.engine.sendCycleStart();
     } else {
         gating.lockSnapshot(drv);
@@ -19,7 +19,7 @@ pub fn cmdCycleStart(drv: anytype) void {
 }
 
 pub fn cmdFeedHold(drv: anytype) void {
-    if (gating.isReady(drv)) {
+    if (gating.canSendCommands(drv)) {
         drv.engine.sendFeedHold();
     } else {
         gating.lockSnapshot(drv);
@@ -68,7 +68,7 @@ pub fn cycleWcs(drv: anytype) void {
     drv.snapshot.wcs = wcs;
     gating.unlockSnapshot(drv);
     if (drv.store) |s| s.persistU8(settings_keys.cnc_wcs, @intCast(next_idx));
-    if (gating.isReady(drv)) driver_ops.sendGcodeClamped(drv, cnc_state.wcsStr(wcs));
+    if (gating.canSendCommands(drv)) driver_ops.sendGcodeClamped(drv, cnc_state.wcsStr(wcs));
 }
 
 pub fn setActiveAxis(drv: anytype, axis_idx: u8) void {
@@ -340,7 +340,7 @@ pub fn cmdEstop(drv: anytype) void {
 }
 
 pub fn cmdRapidOverride(drv: anytype, pct: u8) void {
-    if (gating.isReady(drv)) {
+    if (gating.canSendCommands(drv)) {
         drv.engine.sendRapidOverride(pct);
     } else {
         gating.lockSnapshot(drv);
@@ -376,7 +376,7 @@ pub fn cmdSpindleOverride(drv: anytype, delta: i8) void {
 }
 
 pub fn cmdSpindleToggle(drv: anytype) void {
-    if (gating.isReady(drv)) drv.engine.sendSpindleStopToggle();
+    if (gating.canSendCommands(drv)) drv.engine.sendSpindleStopToggle();
 }
 
 fn spindleCmdRpm(drv: anytype) u32 {
@@ -396,7 +396,7 @@ fn spindleCmdRpm(drv: anytype) u32 {
 }
 
 pub fn cmdSpindleCw(drv: anytype) void {
-    if (!gating.isReady(drv)) return;
+    if (!gating.canSendCommands(drv)) return;
     var buf: [32]u8 = undefined;
     const rpm = spindleCmdRpm(drv);
     const line = std.fmt.bufPrint(&buf, "M3 S{d}", .{rpm}) catch return;
@@ -404,7 +404,7 @@ pub fn cmdSpindleCw(drv: anytype) void {
 }
 
 pub fn cmdSpindleCcw(drv: anytype) void {
-    if (!gating.isReady(drv)) return;
+    if (!gating.canSendCommands(drv)) return;
     if (drv.store) |s| {
         if (!s.getBool(settings_keys.cnc_spcw, true)) return;
     }
@@ -415,7 +415,7 @@ pub fn cmdSpindleCcw(drv: anytype) void {
 }
 
 pub fn cmdRunMacro(drv: anytype) void {
-    if (!gating.isReady(drv)) return;
+    if (!gating.canSendCommands(drv)) return;
     var buf: [settings_keys.cnc_macro_max_len + 1]u8 = undefined;
     @memset(&buf, 0);
     const line: []const u8 = blk: {
@@ -431,19 +431,19 @@ pub fn cmdRunMacro(drv: anytype) void {
 }
 
 pub fn cmdCoolantToggle(drv: anytype) void {
-    if (gating.isReady(drv)) drv.engine.sendCoolantFloodToggle();
+    if (gating.canSendCommands(drv)) drv.engine.sendCoolantFloodToggle();
 }
 
 pub fn cmdMistToggle(drv: anytype) void {
-    if (gating.isReady(drv)) drv.engine.sendCoolantMistToggle();
+    if (gating.canSendCommands(drv)) drv.engine.sendCoolantMistToggle();
 }
 
 pub fn cmdFanToggle(drv: anytype) void {
-    if (gating.isReady(drv)) drv.engine.sendFanToggle();
+    if (gating.canSendCommands(drv)) drv.engine.sendFanToggle();
 }
 
 pub fn cmdSingleStep(drv: anytype) void {
-    if (gating.isReady(drv)) drv.engine.sendSingleStepToggle();
+    if (gating.canSendCommands(drv)) drv.engine.sendSingleStepToggle();
 }
 
 pub fn cmdMpgToggle(drv: anytype) void {
@@ -471,7 +471,7 @@ pub fn setUnitsMm(drv: anytype, mm: bool) void {
     drv.snapshot.units_mm = mm;
     gating.unlockSnapshot(drv);
     if (drv.store) |s| s.persistBool(settings_keys.cnc_unit, mm);
-    if (!gating.isReady(drv)) return;
+    if (!gating.canSendCommands(drv)) return;
     if (drv.store) |s| {
         const idx = s.getU8(settings_keys.cnc_proto, cnc_config.k_default_cnc_proto);
         const proto: cnc_config.Protocol = if (idx < @intFromEnum(cnc_config.Protocol._count))
@@ -495,5 +495,5 @@ pub fn setWcs(drv: anytype, w: cnc_state.WCS) void {
     gating.lockSnapshot(drv);
     drv.snapshot.wcs = wcs;
     gating.unlockSnapshot(drv);
-    if (gating.isReady(drv)) driver_ops.sendGcodeClamped(drv, cnc_state.wcsStr(wcs));
+    if (gating.canSendCommands(drv)) driver_ops.sendGcodeClamped(drv, cnc_state.wcsStr(wcs));
 }

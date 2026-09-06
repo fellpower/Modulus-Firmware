@@ -337,6 +337,64 @@ test "cnc: cmdZeroAxis still sends under mpg_blocked" {
     try testing.expectEqualStrings("G10 L20 P1 X0\n", sent.items);
 }
 
+test "cnc: realtime overrides still send under mpg_blocked" {
+    var drv = Driver.init(.{});
+    var sent = std.ArrayListUnmanaged(u8).empty;
+    defer sent.deinit(testing.allocator);
+    drv.setSendFn(test_util.appendSend(&sent, testing.allocator));
+    test_util.connectToReady(&drv, 0);
+    drv.feed("ok\n");
+    drv.poll(0);
+    drv.feed("<Idle|MPos:0,0,0|Ov:158,100,100|MPG:1>\n");
+    drv.poll(0);
+    try testing.expectEqual(
+        @import("grblhal/session.zig").SessionState.mpg_blocked,
+        drv.engine.session(),
+    );
+
+    sent.clearRetainingCapacity();
+    drv.cmdFeedOverride(0);
+    try testing.expectEqualSlices(u8, &.{0x90}, sent.items);
+
+    sent.clearRetainingCapacity();
+    drv.cmdSpindleOverride(0);
+    try testing.expectEqualSlices(u8, &.{0x99}, sent.items);
+}
+
+test "cnc: dashboard realtime controls still send under mpg_blocked" {
+    var drv = Driver.init(.{});
+    var sent = std.ArrayListUnmanaged(u8).empty;
+    defer sent.deinit(testing.allocator);
+    drv.setSendFn(test_util.appendSend(&sent, testing.allocator));
+    test_util.connectToReady(&drv, 0);
+    drv.feed("ok\n");
+    drv.poll(0);
+    drv.feed("<Idle|MPos:0,0,0|MPG:1>\n");
+    drv.poll(0);
+
+    inline for (.{
+        "cycle_start",
+        "feed_hold",
+        "rapid_override",
+        "spindle_toggle",
+        "coolant",
+        "mist",
+        "fan",
+        "single_step",
+    }) |command| {
+        sent.clearRetainingCapacity();
+        if (std.mem.eql(u8, command, "cycle_start")) drv.cmdCycleStart();
+        if (std.mem.eql(u8, command, "feed_hold")) drv.cmdFeedHold();
+        if (std.mem.eql(u8, command, "rapid_override")) drv.cmdRapidOverride(50);
+        if (std.mem.eql(u8, command, "spindle_toggle")) drv.cmdSpindleToggle();
+        if (std.mem.eql(u8, command, "coolant")) drv.cmdCoolantToggle();
+        if (std.mem.eql(u8, command, "mist")) drv.cmdMistToggle();
+        if (std.mem.eql(u8, command, "fan")) drv.cmdFanToggle();
+        if (std.mem.eql(u8, command, "single_step")) drv.cmdSingleStep();
+        try testing.expect(sent.items.len > 0);
+    }
+}
+
 test "cnc: cmdZeroAxis gated when disconnected" {
     var drv = Driver.init(.{});
     var tx_len: usize = 0;
