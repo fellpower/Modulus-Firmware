@@ -1,131 +1,80 @@
-# Package prebuilt flash images from local IDF build dirs into dist/flash-images/.
-# Run after a successful full build. Does not rebuild.
+# Merge existing release files only. Never invokes a firmware build or downloads files.
+[CmdletBinding()]
 param(
-    [string]$Version = "3.1.0",
-    [string]$OutRoot = ""
+    [string]$Version = '3.1.3-ota',
+    [string]$SourceRoot = '',
+    [string]$OutRoot = '',
+    [string]$Python = 'python'
 )
-
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 $RepoRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
-if (-not $OutRoot) { $OutRoot = Join-Path $RepoRoot "dist\flash-images\v$Version" }
-
-function Copy-FlashSet {
-    param(
-        [string]$Name,
-        [string]$BuildDir,
-        [string]$Chip,
-        [hashtable]$Files,  # destName -> relative path under BuildDir
-        [string]$FlashCmd
-    )
-    if (-not (Test-Path -LiteralPath $BuildDir)) {
-        Write-Warning "Skip $Name — missing build dir: $BuildDir"
-        return $null
+$Tag = 'v' + ($Version -replace '^v', '')
+if (-not $SourceRoot) { $SourceRoot = Join-Path $RepoRoot "dist/flash-images/$Tag-source" }
+if (-not $OutRoot) { $OutRoot = Join-Path $RepoRoot "dist/flash-images/$Tag-full" }
+$SourceRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
+$OutRoot = [IO.Path]::GetFullPath($OutRoot)
+$manifest = Get-Content -LiteralPath (Join-Path $SourceRoot 'MANIFEST.json') -Raw | ConvertFrom-Json
+if ($manifest.release -ne $Tag) { throw 'Release manifest does not match Version.' }
+$targets = @(
+    @{ Name = 'tab5-p4'; Chip = 'esp32p4'; Output = 'tab5-p4' },
+    @{ Name = 'tab5-c6'; Chip = 'esp32c6'; Output = 'tab5-c6' },
+    @{ Name = 's3-xiao'; Chip = 'esp32s3'; Output = 'xiao-s3' }
+)
+# Validate every input before producing any output; never silently skip a target.
+$plans = foreach ($target in $targets) {
+    $configs = @(Get-ChildItem -LiteralPath $SourceRoot -Recurse -Filter flasher_args.json |
+        Where-Object { $_.Directory.Name -eq $target.Name })
+    if ($configs.Count -ne 1) { throw "Expected exactly one flasher_args.json for $($target.Name)." }
+    $dir = $configs[0].Directory.FullName
+    $config = Get-Content -LiteralPath $configs[0].FullName -Raw | ConvertFrom-Json
+    if ($config.extra_esptool_args.chip -ne $target.Chip) { throw "Wrong chip for $($target.Name)." }
+    $records = @($manifest.targets | Where-Object name -eq $target.Name)
+    if ($records.Count -ne 1) { throw "Missing or duplicate manifest target $($target.Name)." }
+    $entries = @($config.flash_files.PSObject.Properties)
+    if ($entries.Count -ne @($records[0].flash_files).Count) { throw 'Flash file count differs from manifest.' }
+    $end = 0L
+    $mergeArgs = @()
+    foreach ($entry in ($entries | Sort-Object { [Convert]::ToInt64($_.Name, 16) })) {
+        $path = [IO.Path]::GetFullPath((Join-Path $dir $entry.Value))
+        if (-not $path.StartsWith($dir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Input path escapes target folder.' }
+        $record = @($records[0].flash_files | Where-Object file -eq $entry.Value)
+        if ($record.Count -ne 1) { throw "File missing or duplicated in manifest: $path" }
+        $file = Get-Item -LiteralPath $path
+        if ($file.Length -ne $record[0].bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $record[0].sha256) { throw "Input checksum/size mismatch: $path" }
+        $offset = [Convert]::ToInt64($entry.Name, 16)
+        if ($offset -lt $end) { throw "Overlapping flash regions: $path" }
+        $end = $offset + $file.Length
+        $mergeArgs += @($entry.Name, $path)
     }
-    $dest = Join-Path $OutRoot $Name
-    New-Item -ItemType Directory -Force -Path $dest | Out-Null
-    foreach ($kv in $Files.GetEnumerator()) {
-        $src = Join-Path $BuildDir $kv.Value
-        if (-not (Test-Path -LiteralPath $src)) {
-            throw "Missing $src for $Name"
-        }
-        Copy-Item -LiteralPath $src -Destination (Join-Path $dest $kv.Key) -Force
-    }
-    Copy-Item -LiteralPath (Join-Path $BuildDir "flasher_args.json") -Destination (Join-Path $dest "flasher_args.json") -Force -ErrorAction SilentlyContinue
-
-    $readme = @"
-# Modulus $Name — flash package v$Version
-
-Chip: **$Chip**
-
-## esptool (from this folder)
-
-``````text
-$FlashCmd
-``````
-
-Requires esptool or ESP-IDF ``idf.py -p COMx flash`` from the matching ``firmware/`` tree after build.
-
-SHA256 of each ``.bin`` is listed in ``../SHA256SUMS.txt``.
-"@
-    Set-Content -Path (Join-Path $dest "FLASH.md") -Value $readme -Encoding utf8
-    return $dest
+    if ($config.flash_settings.flash_size -notmatch '^(\d+)MB$') { throw 'Unsupported flash size.' }
+    if ($end -gt ([long]$Matches[1] * 1MB)) { throw 'Image exceeds flash capacity.' }
+    $output = Join-Path $OutRoot "modulus-$($target.Output)-full-$Tag.bin"
+    if (Test-Path -LiteralPath $output) { throw "Output already exists: $output. Choose a fresh OutRoot." }
+    @{ Target = $target; Config = $config; Args = $mergeArgs; Output = $output }
 }
-
-New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
-Write-Host "==> Packaging -> $OutRoot"
-
-$c6Build = "C:\modulus_tab5_c6_build\slave\build"
-if (-not (Test-Path -LiteralPath (Join-Path $c6Build "network_adapter.bin"))) {
-    $c6Build = Join-Path $RepoRoot "firmware\tab5-c6\build"
+New-Item -ItemType Directory -Path $OutRoot -Force | Out-Null
+$sums = @()
+$commands = @()
+foreach ($plan in $plans) {
+    # No flash-header overrides: retain the released bytes and fill gaps with 0xFF.
+    $arguments = @('-m', 'esptool', '--chip', $plan.Target.Chip, 'merge-bin', '--format', 'raw', '--target-offset', '0x0', '-o', $plan.Output) + $plan.Args
+    & $Python @arguments
+    if ($LASTEXITCODE -ne 0) { throw "esptool merge failed for $($plan.Target.Name)." }
+    $name = Split-Path -Leaf $plan.Output
+    $hash = (Get-FileHash -LiteralPath $plan.Output -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sums += "$hash  $name"
+    $settings = $plan.Config.flash_settings
+    $commands += "python -m esptool --chip $($plan.Target.Chip) -p PORT write-flash --flash-mode $($settings.flash_mode) --flash-freq $($settings.flash_freq) --flash-size $($settings.flash_size) 0x0 $name"
 }
-
-$sets = @()
-$sets += Copy-FlashSet -Name "tab5-p4" -BuildDir (Join-Path $RepoRoot "firmware\tab5\build") -Chip "esp32p4" -Files @{
-    "bootloader.bin"        = "bootloader\bootloader.bin"
-    "partition-table.bin"   = "partition_table\partition-table.bin"
-    "modulus_tab5.bin"      = "modulus_tab5.bin"
-} -FlashCmd @'
-esptool.py --chip esp32p4 -p COM5 --before default-reset --after hard-reset write_flash --flash-mode dio --flash-freq 40m --flash-size 16MB ^
-  0x2000 bootloader.bin ^
-  0x8000 partition-table.bin ^
-  0x10000 modulus_tab5.bin
-'@
-
-$c6Files = @{
-    "bootloader.bin"      = "bootloader\bootloader.bin"
-    "partition-table.bin" = "partition_table\partition-table.bin"
-    "network_adapter.bin" = "network_adapter.bin"
-}
-if (Test-Path -LiteralPath (Join-Path $c6Build "ota_data_initial.bin")) {
-    $c6Files["ota_data_initial.bin"] = "ota_data_initial.bin"
-}
-$sets += Copy-FlashSet -Name "tab5-c6" -BuildDir $c6Build -Chip "esp32c6" -Files $c6Files -FlashCmd @'
-esptool.py --chip esp32c6 -p COM6 --before default-reset --after hard-reset write_flash --flash-mode dio --flash-freq 80m --flash-size 4MB ^
-  0x0 bootloader.bin ^
-  0x8000 partition-table.bin ^
-  0xd000 ota_data_initial.bin ^
-  0x10000 network_adapter.bin
-'@
-
-$sets += Copy-FlashSet -Name "nanoh2" -BuildDir (Join-Path $RepoRoot "firmware\nanoh2\build") -Chip "esp32h2" -Files @{
-    "bootloader.bin"      = "bootloader\bootloader.bin"
-    "partition-table.bin" = "partition_table\partition-table.bin"
-    "modulus_nanoh2.bin"  = "modulus_nanoh2.bin"
-} -FlashCmd @'
-esptool.py --chip esp32h2 -p COM7 --before default-reset --after hard-reset write_flash --flash-mode dio --flash-freq 48m --flash-size 4MB ^
-  0x0 bootloader.bin ^
-  0x8000 partition-table.bin ^
-  0x10000 modulus_nanoh2.bin
-'@
-
-$sets += Copy-FlashSet -Name "s3-bridge" -BuildDir (Join-Path $RepoRoot "firmware\s3-bridge\build") -Chip "esp32s3" -Files @{
-    "bootloader.bin"              = "bootloader\bootloader.bin"
-    "partition-table.bin"         = "partition_table\partition-table.bin"
-    "s3_espnow_uart_bridge.bin"   = "s3_espnow_uart_bridge.bin"
-} -FlashCmd @'
-esptool.py --chip esp32s3 -p COM8 --before default-reset --after hard-reset write_flash --flash-mode dio --flash-freq 80m --flash-size 8MB ^
-  0x0 bootloader.bin ^
-  0x8000 partition-table.bin ^
-  0x10000 s3_espnow_uart_bridge.bin
-'@
-
-$sums = Join-Path $OutRoot "SHA256SUMS.txt"
-Remove-Item -LiteralPath $sums -ErrorAction SilentlyContinue
-Get-ChildItem -Path $OutRoot -Recurse -Filter "*.bin" | Sort-Object FullName | ForEach-Object {
-    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower()
-    $rel = $_.FullName.Substring($OutRoot.Length).TrimStart('\','/') -replace '\\','/'
-    Add-Content -Path $sums -Value "$hash  $rel"
-}
-
-$zips = @()
-Get-ChildItem -Path $OutRoot -Directory | ForEach-Object {
-    $zip = Join-Path $OutRoot ("modulus-{0}-v{1}.zip" -f $_.Name, $Version)
-    if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path (Join-Path $_.FullName '*') -DestinationPath $zip -Force
-    $zips += $zip
-    Write-Host "==> $zip"
-}
-
-Write-Host "==> Done. Zips:"
-$zips | ForEach-Object { Write-Host "  $_" }
-Write-Host "==> SHA256SUMS: $sums"
+$sums | Set-Content -LiteralPath (Join-Path $OutRoot 'SHA256SUMS-full.txt') -Encoding utf8
+@(
+    "# Full images: $Tag", '',
+    "Source commit: $($manifest.source_commit). Inputs verified against MANIFEST.json. No rebuild.", '',
+    'USB installation/recovery only. Replace PORT with the target serial port.',
+    'Write exactly one BIN at 0x0. Never select a full image in a C6/S3 OTA menu.',
+    'Gaps contain 0xFF; flashing can reset settings/NVS and OTA selection within the image range.', '',
+    '```text'
+) + $commands + @('```', '', 'Checksums: SHA256SUMS-full.txt') |
+    Set-Content -LiteralPath (Join-Path $OutRoot 'FLASH-full.md') -Encoding utf8
+Write-Host "Full images and checksums: $OutRoot"

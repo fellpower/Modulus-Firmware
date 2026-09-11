@@ -1,0 +1,51 @@
+# Videoanleitung: Modulus v3.1.3-ota installieren
+
+- **Einstieg / Ziel zeigen**
+  - Tab5 und XIAO ESP32-S3 ins Bild nehmen.
+  - „Wir installieren die vorhandene Release-Firmware ohne lokalen Neubau.“
+  - „Pro Chip brauchen wir genau eine Full-BIN. Flash-Adresse: immer 0x0.“
+- **Download zeigen**
+  - https://github.com/fellpower/Modulus-Firmware/releases/tag/v3.1.3-ota öffnen.
+  - `modulus-tab5-p4-full-v3.1.3-ota.bin` herunterladen.
+  - `modulus-tab5-c6-full-v3.1.3-ota.bin` herunterladen.
+  - `modulus-xiao-s3-full-v3.1.3-ota.bin` herunterladen.
+  - „Full-BINs sind für USB-Erstinstallation oder Wiederherstellung. App-only-BINs sind für spätere OTA-Updates.“
+- **Vorbereitung zeigen**
+  - Maschine stillsetzen; Hardware-Not-Aus erreichbar halten.
+  - Vorhandene Verbindungsdaten, S3-MAC und Funkkanal notieren: Full-Images können Einstellungen und OTA-Auswahl zurücksetzen.
+  - USB-Datenkabel verwenden, tatsächlichen COM-Port im Geräte-Manager zeigen.
+  - `python -m pip install esptool==5.3.1` ausführen; Terminal im Downloadordner öffnen.
+- **P4 zuerst flashen**
+  - Tab5-P4 per USB verbinden; bei Bedarf Downloadmodus aktivieren.
+  - P4-Befehl aus `README.de.md` zeigen und den tatsächlichen COM-Port einsetzen.
+  - Dateiname und `0x0` hervorheben; nur diesen einen Befehl starten.
+  - „Die richtige interne Bootloader-Adresse ist bereits im Full-Image berücksichtigt.“
+  - Verifikation abwarten, Tab5 neu starten und C6-/S3-Update-Menüs zeigen.
+- **C6 per USB installieren oder wiederherstellen**
+  - „Bei funktionierendem SDIO ist auch das App-only-Update über das Tab5 möglich.“
+  - Für den kabelgebundenen Weg den C6-USB-Bootloader verbinden; bei Bedarf BOOT beim Anschließen halten.
+  - „Der P4-USB-Port flasht den C6 nicht direkt.“
+  - C6-Befehl aus `README.de.md` zeigen: richtiger Port, C6-Full-BIN, Adresse `0x0`.
+  - Verifikation abwarten und Tab5 neu starten.
+- **XIAO ESP32-S3 einmalig vorbereiten**
+  - XIAO per USB verbinden; bei Bedarf BOOT-/Downloadmodus verwenden.
+  - XIAO-S3-Befehl aus `README.de.md` zeigen: richtiger Port, XIAO-Full-BIN, Adresse `0x0`.
+  - „Diese BIN enthält die Dual-Slot-Partitionstabelle und den OTA-Empfänger.“
+  - Verifikation abwarten, XIAO neu starten; kein zusätzlicher Erase-Befehl nötig.
+- **Optional: grafisches Flashtool zeigen**
+  - Richtigen Chip und COM-Port auswählen.
+  - Eine Dateizeile aktivieren, passende Full-BIN wählen, Adresse `0x0` setzen.
+  - Flash-Einstellungen aus dem jeweiligen README-Befehl übernehmen.
+- **Späteres OTA-Update demonstrieren**
+  - Passende `modulus-tab5-c6-ota-app-v3.1.3-ota.bin` oder `modulus-xiao-s3-ota-app-v3.1.3-ota.bin` herunterladen.
+  - App-BIN ins Stammverzeichnis eines FAT32-Sticks kopieren und in Tab5 USB-A stecken.
+  - M Panel → C6 Update oder S3 Update → Refresh USB → Datei wählen.
+  - Check image / Check S3 image zeigen; anschließend Flash C6 / Flash S3 bestätigen.
+  - Strom und Stick angeschlossen lassen.
+  - C6: automatischen P4-Neustart nach drei Sekunden abwarten.
+  - S3: nach erfolgreicher Prüfung Restart S3 drücken.
+  - „Full-BINs niemals im OTA-Menü auswählen. microSD ist hier keine Updatequelle.“
+- **Abschluss / Funktion prüfen**
+  - Dashboard und ESP-NOW-Verbindungsstatus zeigen.
+  - Bei Bedarf S3-MAC und passenden Kanal unter Settings → Wireless erneut eintragen.
+  - „Drei Chips, drei Full-Images, beim kabelgebundenen Flash immer eine BIN an 0x0.“
