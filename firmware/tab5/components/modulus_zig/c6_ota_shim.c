@@ -24,6 +24,8 @@
 #define OTA_CHUNK_SIZE 4096
 #define OTA_MAX_IMAGE_SIZE (4U * 1024U * 1024U)
 #define OTA_HOST_RESTART_DELAY_MS 3000
+/* Pre-2.6 slaves schedule their own reboot 5 s after OTA end. */
+#define OTA_LEGACY_HOST_RESTART_DELAY_MS 8000
 
 static const char *TAG = "c6_ota";
 static modulus_c6_ota_snapshot_t s_state = {
@@ -212,16 +214,57 @@ static void ota_worker(void *arg)
     snprintf(s_state.status, sizeof(s_state.status), "Flashing C6. Do not remove power or the source drive.");
     taskEXIT_CRITICAL(&s_lock);
 
+    /* Query the running slave, not the image version or a cached UI snapshot.
+     * Before 2.6.0 OTAEnd selects the boot partition and schedules reboot;
+     * newer slaves require OTAActivate. Never probe activation after OTAEnd.
+     */
+    esp_hosted_coprocessor_fwver_t ver = {0};
+    esp_err_t err = esp_hosted_get_coprocessor_fwversion(&ver);
+    if (err != ESP_OK || ver.major1 == 0) {
+        taskENTER_CRITICAL(&s_lock);
+        s_state.c6_connected = false;
+        s_state.c6_version[0] = 0;
+        taskEXIT_CRITICAL(&s_lock);
+        state_status(MODULUS_C6_OTA_ERROR,
+                     "Cannot read running C6 firmware version. Nothing written. Refresh and retry; use C6 USB recovery if unreachable.");
+        s_worker_running = false;
+        vTaskDelete(NULL);
+        return;
+    }
+    const bool explicit_activate = ver.major1 > 2 || (ver.major1 == 2 && ver.minor1 >= 6);
+    const unsigned restart_delay_ms = explicit_activate ? OTA_HOST_RESTART_DELAY_MS : OTA_LEGACY_HOST_RESTART_DELAY_MS;
+    taskENTER_CRITICAL(&s_lock);
+    s_state.c6_connected = true;
+    snprintf(s_state.c6_version, sizeof(s_state.c6_version), "%lu.%lu.%lu",
+             (unsigned long)ver.major1, (unsigned long)ver.minor1, (unsigned long)ver.patch1);
+    snprintf(s_state.status, sizeof(s_state.status), "Flashing C6 (%s). Keep power and USB connected.",
+             explicit_activate ? "explicit activation" : "legacy auto-restart");
+    taskEXIT_CRITICAL(&s_lock);
+    ESP_LOGI(TAG, "Running C6 %lu.%lu.%lu: %s OTA completion",
+             (unsigned long)ver.major1, (unsigned long)ver.minor1, (unsigned long)ver.patch1,
+             explicit_activate ? "explicit activation" : "legacy auto-restart");
+
+    const char *stage = "open image";
+    bool activation_uncertain = false;
     FILE *f = fopen(path, "rb");
-    uint8_t *buf = malloc(OTA_CHUNK_SIZE);
-    bool ota_started = false;
-    esp_err_t err = (f && buf) ? esp_hosted_slave_ota_begin() : ESP_ERR_NO_MEM;
-    if (err == ESP_OK) ota_started = true;
+    uint8_t *buf = NULL;
+    err = f ? ESP_OK : ESP_ERR_NOT_FOUND;
+    if (err == ESP_OK) {
+        stage = "allocate buffer";
+        buf = malloc(OTA_CHUNK_SIZE);
+        if (!buf) err = ESP_ERR_NO_MEM;
+    }
+    if (err == ESP_OK) {
+        stage = "begin";
+        err = esp_hosted_slave_ota_begin();
+    }
     size_t sent = 0;
     while (err == ESP_OK && sent < image_size) {
         size_t want = image_size - sent;
         if (want > OTA_CHUNK_SIZE) want = OTA_CHUNK_SIZE;
+        stage = "read image";
         if (fread(buf, 1, want, f) != want) { err = ESP_FAIL; break; }
+        stage = "transfer";
         err = esp_hosted_slave_ota_write(buf, (uint32_t)want);
         if (err != ESP_OK) break;
         sent += want;
@@ -229,11 +272,19 @@ static void ota_worker(void *arg)
         s_state.progress = (uint8_t)((sent * 100U) / image_size);
         taskEXIT_CRITICAL(&s_lock);
     }
-    if (ota_started) {
-        const esp_err_t end_err = esp_hosted_slave_ota_end();
-        if (err == ESP_OK) err = end_err;
+    /* OTAEnd can activate on legacy firmware, so never use it as cleanup
+     * after an incomplete transfer. A failed transfer must be retried/recovered.
+     */
+    if (err == ESP_OK && sent == image_size) {
+        stage = "finalize";
+        activation_uncertain = !explicit_activate;
+        err = esp_hosted_slave_ota_end();
     }
-    if (err == ESP_OK && sent == image_size) err = esp_hosted_slave_ota_activate();
+    if (err == ESP_OK && sent == image_size && explicit_activate) {
+        stage = "activate";
+        activation_uncertain = true;
+        err = esp_hosted_slave_ota_activate();
+    }
     if (f) fclose(f);
     free(buf);
 
@@ -242,16 +293,19 @@ static void ota_worker(void *arg)
         s_state.phase = MODULUS_C6_OTA_SUCCESS;
         s_state.progress = 100;
         s_state.c6_connected = false;
-        snprintf(s_state.status, sizeof(s_state.status), "C6 updated successfully. Modulus will restart in 3 seconds.");
+        snprintf(s_state.status, sizeof(s_state.status), "C6 update accepted. Waiting for C6 restart; Modulus restarts in %u seconds.",
+                 restart_delay_ms / 1000U);
         taskEXIT_CRITICAL(&s_lock);
-        ESP_LOGW(TAG, "C6 firmware activated; restarting P4 in %u ms to resync ESP-Hosted/SDIO",
-                 OTA_HOST_RESTART_DELAY_MS);
-        vTaskDelay(pdMS_TO_TICKS(OTA_HOST_RESTART_DELAY_MS));
+        ESP_LOGW(TAG, "C6 OTA completion accepted; restarting P4 in %u ms to resync ESP-Hosted/SDIO",
+                 restart_delay_ms);
+        vTaskDelay(pdMS_TO_TICKS(restart_delay_ms));
         esp_restart();
     } else {
         char msg[MODULUS_C6_OTA_STATUS_LEN];
-        snprintf(msg, sizeof(msg), "C6 update failed at %u/%u bytes: %s. The image was not activated.",
-                 (unsigned)sent, (unsigned)image_size, esp_err_to_name(err));
+        snprintf(msg, sizeof(msg), "C6 OTA %s failed at %u/%u: %s. %s",
+                 stage, (unsigned)sent, (unsigned)image_size, esp_err_to_name(err),
+                 activation_uncertain ? "Activation unconfirmed; wait, then check C6 version."
+                                      : "Activation not requested. Retry or use C6 USB recovery.");
         state_status(MODULUS_C6_OTA_ERROR, msg);
     }
     s_worker_running = false;

@@ -107,6 +107,22 @@ Ein zusätzliches `erase-flash` gehört nicht zu diesem Ablauf.
 Das bisherige `modulus-xiao-s3-first-flash-for-ota-v3.1.3-ota.bin` ist mit dem
 neuen XIAO-Full-Image inhaltsgleich. Nicht mit dem generischen S3-Bridge-Paket verwechseln.
 
+## C6-Kompatibilität in nachfolgenden Quellcode-Builds
+
+Der Branch fragt die **laufende C6-Version unmittelbar vor dem Schreiben** ab.
+Unter 2.6.0 (auch 1.4.1) aktiviert `OTAEnd` das Image und plant den C6-Neustart;
+ein zusätzliches `OTAActivate` entfällt. Der P4 wartet acht Sekunden bis zu seinem
+Neustart. Ab 2.6.0 wird explizit aktiviert, danach startet der P4 wie bisher nach
+drei Sekunden neu. Bei unbekannter oder nicht lesbarer Version wird nichts geschrieben.
+Eine funktionierende ESP-Hosted-Verbindung und geeignete C6-OTA-Partition bleiben
+nötig. Eine verlorene Abschluss-/Aktivierungsantwort wird als unbestätigter Zustand
+gemeldet, nicht als sicher ausgebliebene Aktivierung.
+
+**Diese Änderung gilt bisher nur für den Quellcode. Die Release-BINs v3.1.3-ota
+wurden nicht neu gebaut und behalten den bisherigen Ablauf.**
+Regressionstest: `python scripts/test_c6_ota.py` (benötigt Zig).
+Der Hardwaretest mit Factory-Firmware 1.4.1 steht noch aus.
+
 ## Spätere Updates über USB-Stick und OTA
 
 - P4 normal starten und **M Panel → C6 Update / S3 Update** prüfen.

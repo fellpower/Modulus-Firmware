@@ -227,6 +227,22 @@ then restart the board. A separate `erase-flash` is not part of this procedure.
 The older `modulus-xiao-s3-first-flash-for-ota-v3.1.3-ota.bin` is equivalent to
 the new XIAO full image. This XIAO image is not the generic S3 bridge package.
 
+### C6 compatibility in subsequent source builds
+
+The branch queries the **running C6 firmware immediately before writing**.
+Below 2.6.0 (including 1.4.1), legacy `OTAEnd` activates the image and schedules
+the C6 reboot; no `OTAActivate` is sent. The P4 waits eight seconds before
+restarting. From 2.6.0 onward, explicit activation is followed by the existing
+three-second P4 restart delay. Unknown/unreadable versions stop before any write.
+A working ESP-Hosted connection and suitable C6 OTA partition remain necessary.
+A lost completion/activation response is reported as uncertain, not as proof
+that activation did not happen.
+
+**This change is source-only: existing v3.1.3-ota release BINs have not been
+rebuilt and retain the previous behavior.** Run the host regression test with
+`python scripts/test_c6_ota.py` (requires Zig). Hardware validation with factory
+1.4.1 is still required.
+
 ### Later C6/S3 updates through Tab5
 
 1. Boot the P4 and confirm **M Panel → C6 Update / S3 Update** are available.
