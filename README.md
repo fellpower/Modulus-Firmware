@@ -211,7 +211,10 @@ and OTA selection within its address range. Use app-only OTA for later C6/S3 upd
 Install esptool with `python -m pip install esptool==5.3.1`. Open a terminal in
 the download folder. Replace the example COM ports with the actual target ports.
 Use a USB data cable and connect the correct processor's USB bootloader: the
-Tab5 P4 port does not directly flash the C6. If necessary, enter the target's
+Tab5 P4 port does not directly flash the C6. The C6 requires its internal
+programming connector and a USB-TTL downloader; see the
+[M5Stack C6 recovery guide](https://docs.m5stack.com/en/guide/restore_factory/m5tab5_c6_wifi).
+If necessary, enter the target's
 BOOT/download mode before connecting. Flash P4 first, then C6 if recovery or a
 wired installation is needed, then XIAO S3.
 
@@ -284,6 +287,21 @@ exactly the three full BINs, `SHA256SUMS-full.txt`, and `FLASH-full.md` under
 `dist/flash-images/v3.1.3-ota-full/`. Use `-SourceRoot` and `-OutRoot` to change
 folders; existing output BINs are rejected. These files are not padded to the
 entire flash-chip capacity. Compare hashes with the [recorded full-image checksums](FULL-IMAGES-v3.1.3-ota.sha256).
+
+The all-firmware ZIP also contains the three full BINs directly in its root,
+plus the original per-target files, OTA apps and licenses. To update an existing
+bundle without rebuilding, download its ZIP, release `MANIFEST.json`,
+`FLASH-INSTRUCTIONS-EN-DE.md`, and `SHA256SUMS.txt` into a source folder, then run:
+
+```powershell
+python scripts/update_all_firmware_bundle.py --source dist/release-refresh/source --full-images dist/flash-images/v3.1.3-ota-full --output dist/release-refresh/upload
+```
+
+Use an empty output folder. The helper checks the original bundle and full BINs,
+updates internal and external checksums/manifest, and writes a replacement ZIP.
+Upload all four output files together when updating the existing release.
+
+German hardware test procedure: [C6 legacy OTA test](C6-LEGACY-TEST.de.md).
 
 German recording notes: [Videoanleitung](VIDEOANLEITUNG.de.md).
 

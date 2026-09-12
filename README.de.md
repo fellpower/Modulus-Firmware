@@ -90,7 +90,9 @@ sind deshalb die App-only-Dateien vorgesehen.
 - USB-Datenkabel verwenden, Terminal im Downloadordner öffnen.
 - COM-Port im Geräte-Manager prüfen; `COM5`, `COM6` und `COM8` sind Beispiele.
 - Den USB-Bootloader des richtigen Chips verbinden. Der P4-USB-Anschluss flasht
-  den C6 nicht direkt. Bei Bedarf den jeweiligen BOOT-/Downloadmodus aktivieren.
+  den C6 nicht direkt. Der C6 benötigt den internen Programmieranschluss und einen
+  USB-TTL-Downloader: [M5Stack-Anschlussanleitung](https://docs.m5stack.com/en/guide/restore_factory/m5tab5_c6_wifi).
+  Bei Bedarf den jeweiligen Downloadmodus aktivieren.
 - Reihenfolge: P4 zuerst; C6 bei kabelgebundener Installation/Wiederherstellung;
   danach XIAO S3 einmalig für OTA vorbereiten.
 - Nur den Befehl für das gerade angeschlossene Ziel ausführen:
@@ -164,6 +166,12 @@ vorhandene Ausgabe-BINs werden nicht überschrieben. Die Images reichen bis zum
 Ende der enthaltenen Anwendung, nicht bis zum Ende des gesamten Flash-Speichers.
 [Prüfsummen der drei Full-Images](FULL-IMAGES-v3.1.3-ota.sha256).
 
+Das All-Firmware-ZIP enthält die drei Full-BINs direkt im Hauptordner sowie
+weiterhin alle bisherigen Einzeldateien, OTA-Apps und Lizenzen.
+`scripts/update_all_firmware_bundle.py` aktualisiert das Gesamtpaket einschließlich
+Manifest und Prüfsummen ohne Neubau; Aufruf in der englischen README.
+
+[Hardware-Testablauf mit C6-Version 1.4.1](C6-LEGACY-TEST.de.md).
 [Deutsche stichpunktartige Videoanleitung](VIDEOANLEITUNG.de.md).
 Weitere Architektur- und Build-Informationen stehen in der [englischen README](README.md).
 NanoH2 und generische S3-Bridge bleiben separate Release-Pakete mit eigener `FLASH.md`.

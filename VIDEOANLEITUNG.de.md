@@ -9,6 +9,7 @@
   - `modulus-tab5-p4-full-v3.1.3-ota.bin` herunterladen.
   - `modulus-tab5-c6-full-v3.1.3-ota.bin` herunterladen.
   - `modulus-xiao-s3-full-v3.1.3-ota.bin` herunterladen.
+  - Alternativ das aktualisierte `modulus-all-firmware-v3.1.3-ota.zip` laden; die drei Full-BINs liegen direkt im Hauptordner.
   - „Full-BINs sind für USB-Erstinstallation oder Wiederherstellung. App-only-BINs sind für spätere OTA-Updates.“
 - **Vorbereitung zeigen**
   - Maschine stillsetzen; Hardware-Not-Aus erreichbar halten.
@@ -23,7 +24,8 @@
   - Verifikation abwarten, Tab5 neu starten und C6-/S3-Update-Menüs zeigen.
 - **C6 per USB installieren oder wiederherstellen**
   - „Bei funktionierendem SDIO ist auch das App-only-Update über das Tab5 möglich.“
-  - Für den kabelgebundenen Weg den C6-USB-Bootloader verbinden; bei Bedarf BOOT beim Anschließen halten.
+  - Für den kabelgebundenen Weg den internen C6-Programmieranschluss mit einem passenden USB-TTL-Downloader verbinden.
+  - Anschlussbild: https://docs.m5stack.com/en/guide/restore_factory/m5tab5_c6_wifi
   - „Der P4-USB-Port flasht den C6 nicht direkt.“
   - C6-Befehl aus `README.de.md` zeigen: richtiger Port, C6-Full-BIN, Adresse `0x0`.
   - Verifikation abwarten und Tab5 neu starten.
