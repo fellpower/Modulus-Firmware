@@ -35,7 +35,7 @@ firmware containing the OTA UI, boot Modulus normally, and select the matching
 updater. The XIAO ESP32-S3 needs the OTA-capable full image once over USB; later
 updates use only its application image. Image inspection, explicit arming,
 progress feedback, and a guarded restart keep every write deliberate. After a
-successful C6 activation, the P4 restarts automatically after three seconds to
+successful C6 activation, the P4 restarts automatically after a short delay to
 resynchronize the ESP-Hosted/SDIO link.
 Nothing is flashed automatically.
 
@@ -46,9 +46,9 @@ successful boot from its second OTA slot, have been verified on real hardware.
 > **OTA must be enabled by a one-time wired flash first.** Flash the P4 package
 > over USB so the Tab5 has the OTA menus. A new or previously installed XIAO
 > ESP32-S3 must then be flashed once over USB at offset `0x0` with
-> `modulus-xiao-s3-first-flash-for-ota-*.bin`. This installs the OTA receiver
+> `modulus-xiao-s3-full-*.bin`. This installs the OTA receiver
 > and dual-slot partition table. Only after that first flash can subsequent S3
-> updates use `modulus-xiao-s3-ota-app-*.bin` through **M Panel → S3 Update**.
+> updates use `modulus-xiao-s3-app-*.bin` through **M Panel → S3 Update**.
 > Do not send the first-flash/full image through the OTA menu.
 
 For the Tab5 C6, the stock ESP-Hosted firmware already provides slave OTA. The
@@ -166,7 +166,7 @@ Most M5 projects cram UI and radio onto one busy chip. Modulus uses Tab5 as desi
 
 Pendant E-Stop is a **convenience layer**, not a safety-rated cutoff. It rides the active link (GPIO16 NO → feed-hold `!` then soft reset). **If the wireless link is down, pendant E-Stop will not stop the machine.** Machine mushroom E-Stop is primary. Software: `envelope.zig` soft limits, zero-while-running confirm, link-offline warnings, low-battery MPG lockout.
 
-**Out of scope (roadmap):** SC2356 camera UI · on-screen FFT · OTA dual-partition · PCNT GPIO quadrature (replace I²C ExtEncoder).
+**Out of scope (roadmap):** SC2356 camera UI · on-screen FFT  · PCNT GPIO quadrature (replace I²C ExtEncoder).
 
 ---
 
@@ -188,124 +188,76 @@ LICENSE              MIT
 
 ---
 
-## Prebuilt flash images — v3.1.3-ota
+## Install and update
 
-Download the three full images from the existing
-[release v3.1.3-ota](https://github.com/fellpower/Modulus-Firmware/releases/tag/v3.1.3-ota).
-No local firmware build or ZIP extraction is needed to flash these BINs.
+Download the [v3.1.3-ota release](https://github.com/fellpower/Modulus-Firmware-C6-OTA/releases/tag/v3.1.3-ota).
+Use the P4 full image for the tablet and the XIAO full image for the S3 bridge.
+The current P4 full image contains the tested compatibility path for a C6 on
+factory ESP-Hosted 1.4.1.
 
-| Target | Single USB flash image | Address |
-|--------|------------------------|---------|
-| Tab5 P4 | `modulus-tab5-p4-full-v3.1.3-ota.bin` | `0x0` |
-| Tab5 C6 | `modulus-tab5-c6-full-v3.1.3-ota.bin` | `0x0` |
-| XIAO ESP32-S3 | `modulus-xiao-s3-full-v3.1.3-ota.bin` | `0x0` |
+### Full images and app images
 
-These combine the released bootloader, partition table, initial OTA data (C6/S3)
-and application. The P4 bootloader remains at `0x2000` inside its full image;
-the XIAO S3 application remains at `0x20000`. Always flash the **full BIN at `0x0`**.
-Unused gaps are filled with `0xFF`; writing a full image can reset NVS/settings
-and OTA selection within its address range. Use app-only OTA for later C6/S3 updates.
+- A **full image** contains everything required for the first wired installation.
+  Flash it once at address `0x0`. Full images are provided for P4 and XIAO S3.
+- An **app image** is used for subsequent updates from the Tab5 OTA menus.
+- The **C6 has one release file only**:
+  `modulus-tab5-c6-app-v3.1.3-ota.bin`. Install it through the Tab5 C6
+  update menu, including when upgrading from factory ESP-Hosted 1.4.1.
 
-### USB installation / recovery
+### P4 and XIAO initial installation
 
-Install esptool with `python -m pip install esptool==5.3.1`. Open a terminal in
-the download folder. Replace the example COM ports with the actual target ports.
-Use a USB data cable and connect the correct processor's USB bootloader: the
-Tab5 P4 port does not directly flash the C6. The C6 requires its internal
-programming connector and a USB-TTL downloader; see the
-[M5Stack C6 recovery guide](https://docs.m5stack.com/en/guide/restore_factory/m5tab5_c6_wifi).
-If necessary, enter the target's
-BOOT/download mode before connecting. Flash P4 first, then C6 if recovery or a
-wired installation is needed, then XIAO S3.
+Connect the target through its normal USB port and write the matching single
+full BIN at address `0x0`. This installs the complete bootloader, partition table,
+and application. Example for the XIAO:
 
 ```powershell
-python -m esptool --chip esp32p4 -p COM5 write-flash --flash-mode dio --flash-freq 40m --flash-size 16MB 0x0 modulus-tab5-p4-full-v3.1.3-ota.bin
-python -m esptool --chip esp32c6 -p COM6 write-flash --flash-mode dio --flash-freq 80m --flash-size 4MB 0x0 modulus-tab5-c6-full-v3.1.3-ota.bin
-python -m esptool --chip esp32s3 -p COM8 write-flash --flash-mode dio --flash-freq 80m --flash-size 8MB 0x0 modulus-xiao-s3-full-v3.1.3-ota.bin
+python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-xiao-s3-full-v3.1.3-ota.bin
 ```
 
-Run only the command matching the connected chip. A GUI flasher likewise needs
-one file, address `0x0`, and the matching chip/settings. Wait for verification,
-then restart the board. A separate `erase-flash` is not part of this procedure.
-The older `modulus-xiao-s3-first-flash-for-ota-v3.1.3-ota.bin` is equivalent to
-the new XIAO full image. This XIAO image is not the generic S3 bridge package.
+Replace COM8 with the XIAO port. NanoH2 and generic S3 bridge packages have their
+own `FLASH.md`; the XIAO image is specific to the XIAO board.
 
-### C6 compatibility in subsequent source builds
+### C6 update through the tablet
 
-The branch queries the **running C6 firmware immediately before writing**.
-Below 2.6.0, OTA uses 1024-byte blocks so the protobuf/TLV envelope fits the
-4096-byte receive buffer in 1.4.1. Modern slaves retain 4096-byte blocks.
-Below 2.6.0 (including 1.4.1), legacy `OTAEnd` activates the image and schedules
-the C6 reboot; no `OTAActivate` is sent. The P4 waits eight seconds before
-restarting. From 2.6.0 onward, explicit activation is followed by the existing
-three-second P4 restart delay. Unknown/unreadable versions stop before any write.
-A working ESP-Hosted connection and suitable C6 OTA partition remain necessary.
-A lost completion/activation response is reported as uncertain, not as proof
-that activation did not happen.
+The normal C6 update uses a FAT32 USB stick and the internal SDIO connection.
+The C6 is updated entirely from Modulus; no separate C6 installation procedure
+is part of this release.
 
-**This change is source-only: existing v3.1.3-ota release BINs have not been
-rebuilt and retain the previous behavior.** Run the host regression test with
-`python scripts/test_c6_ota.py` (requires Zig). Hardware validation with factory
-1.4.1 is still required.
+1. Boot a current P4 build and open **M Panel → C6 → Firmware Update**.
+2. Copy `modulus-tab5-c6-app-v3.1.3-ota.bin` to the **root** of a FAT32 stick.
+   In the all-firmware ZIP it is in the `ota/` folder.
+3. Insert the stick into Tab5 USB-A, press **Refresh USB**, and select the file.
+4. Press **Check image**, then **Flash C6** and confirm.
+5. Keep power and the stick connected until the update and P4 restart complete.
+6. Check the running C6 version and ESP-NOW connection after reboot.
 
-### Later C6/S3 updates through Tab5
+The P4 queries the running C6 version and chooses the transfer/completion method
+automatically. The 1.4.1 → Modulus v3.1.3-ota update has now passed on the user's
+Tab5. Older firmware uses smaller blocks and the P4 waits eight seconds; from
+ESP-Hosted 2.6.0 onward it uses explicit activation and waits three seconds.
+No manual mode selection is needed. This does not guarantee every third-party
+or future C6 image: the C6 must respond over ESP-Hosted and have a suitable OTA
+partition. An unreadable version stops the update before writing.
 
-1. Boot the P4 and confirm **M Panel → C6 Update / S3 Update** are available.
-2. Download `modulus-tab5-c6-ota-app-v3.1.3-ota.bin` or
-   `modulus-xiao-s3-ota-app-v3.1.3-ota.bin` from the same release.
-3. Copy the matching **app-only** BIN to the root of a FAT32 USB drive and insert
-   it into the Tab5 USB-A port. microSD is not an OTA source.
-4. Open the matching update page, press **Refresh USB**, select the file and
-   **Check image** (C6) / **Check S3 image** (S3).
-5. Confirm **Flash C6** / **Flash S3**. Keep the machine idle and power/stick connected.
-6. C6 activation restarts the P4 automatically after three seconds. For S3,
-   select **Restart S3** after successful verification.
+**Only the C6 app BIN belongs in this menu.** Never select a full image or ZIP.
+microSD is not an OTA source.
 
-Never select a full BIN, bootloader, partition table, OTA-data file or ZIP in
-an OTA menu. The XIAO needs its USB full-image installation once before S3 OTA.
-If C6 cannot boot or answer over SDIO, use the C6 USB full image above.
+### Why two version numbers are shown
 
-After flashing, check the dashboard and ESP-NOW connection. Set the S3 MAC and
-matching channel under **Settings → Wireless** again if settings were reset.
-NanoH2 and generic S3 packages remain available separately in the release;
-follow their included `FLASH.md`.
+- **Modulus release: v3.1.3-ota** identifies the installed Modulus release.
+- **ESP-Hosted (C6): 2.11.4** is the radio firmware's reported component version.
+- `modulus-tab5-c6-app-v3.1.3-ota.bin` belongs to Modulus release v3.1.3-ota
+  and intentionally reports ESP-Hosted 2.11.4.
 
-### Reproduce the full images without rebuilding
+The C6 separately reports its ESP-Hosted component version. An equal ESP-Hosted
+version does not prove that two BINs contain the same build.
 
-Download `MANIFEST.json` and the three release ZIPs
-`modulus-tab5-p4-v3.1.3-ota.zip`, `modulus-tab5-c6-v3.1.3-ota.zip`, and
-`modulus-s3-xiao-v3.1.3-ota.zip`. Place the manifest in
-`dist/flash-images/v3.1.3-ota-source/` and extract each ZIP below that directory,
-retaining its target folder and `flasher_args.json`.
+### Later XIAO S3 updates
 
-```powershell
-.\scripts\package_flash_images.ps1 -Version 3.1.3-ota
-```
-
-The script validates input sizes and SHA256 against the release manifest and
-uses the recorded flash offsets. It only merges existing bytes with esptool;
-it never builds firmware or falls back to local build directories. It produces
-exactly the three full BINs, `SHA256SUMS-full.txt`, and `FLASH-full.md` under
-`dist/flash-images/v3.1.3-ota-full/`. Use `-SourceRoot` and `-OutRoot` to change
-folders; existing output BINs are rejected. These files are not padded to the
-entire flash-chip capacity. Compare hashes with the [recorded full-image checksums](FULL-IMAGES-v3.1.3-ota.sha256).
-
-The all-firmware ZIP also contains the three full BINs directly in its root,
-plus the original per-target files, OTA apps and licenses. To update an existing
-bundle without rebuilding, download its ZIP, release `MANIFEST.json`,
-`FLASH-INSTRUCTIONS-EN-DE.md`, and `SHA256SUMS.txt` into a source folder, then run:
-
-```powershell
-python scripts/update_all_firmware_bundle.py --source dist/release-refresh/source --full-images dist/flash-images/v3.1.3-ota-full --output dist/release-refresh/upload
-```
-
-Use an empty output folder. The helper checks the original bundle and full BINs,
-updates internal and external checksums/manifest, and writes a replacement ZIP.
-Upload all four output files together when updating the existing release.
-
-German hardware test procedure: [C6 legacy OTA test](C6-LEGACY-TEST.de.md).
-
-German recording notes: [Videoanleitung](VIDEOANLEITUNG.de.md).
+Copy `modulus-xiao-s3-app-v3.1.3-ota.bin` to the USB stick root. Open
+**M Panel → S3 → Firmware Update**, then **Refresh USB → Check S3 image → Flash S3**.
+After successful verification select **Restart S3**. Set matching S3 MAC/channel
+under Settings → Wireless if required.
 
 ---
 
@@ -323,7 +275,7 @@ zig build tab5-lib    # freestanding Zig library
 | Target | Command |
 |--------|---------|
 | Tab5 P4 | `.\scripts\build_tab5.ps1` then `.\scripts\flash_tab5.ps1 -Port COM5` |
-| Tab5 C6 + P4 | `.\scripts\flash_tab5_dual.ps1 -C6Port COM6 -P4Port COM5` *(never `-ZigbeeExclusive`)* |
+| Tab5 C6 | Build with `scripts/build_tab5_c6_modulus.ps1`, then install the app via the Tab5 C6 update menu |
 | NanoH2 | `idf.py -C firmware/nanoh2 flash` (hold BUTTON; enable EXT5V) |
 | S3 bridge | `.\scripts\build_s3_bridge.ps1 -Action flash -Port COM8` |
 | S3 XIAO | same image: USB shell `board xiao` (or factory ` -Board xiao`) then flash |
@@ -346,29 +298,7 @@ zig build tab5-lib    # freestanding Zig library
 > newer IDF than 6.0.1 and the build breaks
 > ([#2](https://github.com/BufferRoot/Modulus-Firmware/issues/2)).
 
-Merge the existing release files into full BINs: `.\scripts\package_flash_images.ps1` (see above).
-
-### Updating the Tab5 C6 from Modulus
-
-The Tab5 **M Panel → C6 Update** page updates the ESP32-C6 over the internal
-ESP-Hosted SDIO connection. Copy an ESP32-C6 **application image** (`.bin`) to
-the root of a FAT32-formatted USB drive, insert it into USB-A, and open the page. For builds
-from this repository, that application is
-`firmware/tab5-c6/build/network_adapter.bin`. Use
-**Refresh USB**, select the file, then **Check image**. Modulus verifies the ESP
-image header and ESP32-C6 chip ID before enabling **Flash C6**.
-
-Flashing never starts automatically. Keep power and the USB drive connected while
-the progress bar is active. After successful activation, the P4 automatically
-restarts after three seconds so it can reconnect to the updated C6 firmware.
-
-Use an ESP-Hosted slave application image compatible with the host component
-version pinned in `firmware/tab5/dependencies.lock`. Do not use a full-flash,
-merged, bootloader, or partition-table image.
-
-Recovery: if the C6 update is interrupted and SDIO no longer starts, restore a
-C6 full image through the C6 USB bootloader at `0x0` (see above). The P4 OTA page cannot repair a C6 that no longer boots far
-enough to provide ESP-Hosted OTA.
+Host regression test for C6 OTA: `python scripts/test_c6_ota.py` (requires Zig).
 
 ### Pinout (Tab5)
 
