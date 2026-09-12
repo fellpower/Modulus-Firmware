@@ -36,6 +36,7 @@ typedef int portMUX_TYPE;
 #define pdMS_TO_TICKS(x) (x)
 #define pdPASS 1
 #define ESP_LOGI(...) ((void)0)
+#define ESP_LOGE(...) ((void)0)
 #define ESP_LOGW(...) ((void)0)
 int esp_hosted_get_coprocessor_fwversion(esp_hosted_coprocessor_fwver_t *);
 int esp_hosted_slave_ota_begin(void);
@@ -71,7 +72,9 @@ int esp_hosted_get_coprocessor_fwversion(esp_hosted_coprocessor_fwver_t *v) {
 int esp_hosted_slave_ota_begin(void) { record('B'); return fault == 2 ? ESP_FAIL : ESP_OK; }
 int esp_hosted_slave_ota_write(uint8_t *b, uint32_t n) {
     record('W'); writes++;
-    assert(n == (writes == 1 ? 4096 : 904));
+    const bool modern = running.major1 > 2 || (running.major1 == 2 && running.minor1 >= 6);
+    assert(n == (modern ? (writes == 1 ? 4096 : 904) : (writes < 5 ? 1024 : 904)));
+    if (!modern) assert(n + 64 < 4096); /* RPC envelope must fit old receiver. */
     for (uint32_t i=0; i<n; i++) assert(b[i] == 0xa5);
     return fault == 3 ? ESP_FAIL : ESP_OK;
 }
@@ -115,8 +118,8 @@ int main(void) {
     FILE *f = fopen("input.bin", "wb"); assert(f);
     for (int i=0; i<5000; i++) fputc(0xa5, f);
     fclose(f);
-    run(1,4,1,0,"VBWWEDRX");
-    run(2,5,99,0,"VBWWEDRX");
+    run(1,4,1,0,"VBWWWWWEDRX");
+    run(2,5,99,0,"VBWWWWWEDRX");
     run(2,6,0,0,"VBWWEADRX");
     run(2,11,4,0,"VBWWEADRX");
     run(3,0,0,0,"VBWWEADRX");
@@ -124,11 +127,11 @@ int main(void) {
     run(0,0,0,0,"VX");
     run(1,4,1,2,"VBX"); assert(strstr(s_state.status,"begin failed"));
     run(1,4,1,3,"VBWX"); assert(strstr(s_state.status,"transfer failed"));
-    run(1,4,1,4,"VBWWEX"); assert(strstr(s_state.status,"Activation unconfirmed"));
+    run(1,4,1,4,"VBWWWWWEX"); assert(strstr(s_state.status,"Activation unconfirmed"));
     run(2,6,0,4,"VBWWEX"); assert(strstr(s_state.status,"Activation not requested"));
     run(2,6,0,5,"VBWWEAX"); assert(strstr(s_state.status,"Activation unconfirmed"));
     run(2,6,0,6,"VX"); assert(strstr(s_state.status,"open image failed"));
-    run(1,4,1,7,"VBWX"); assert(strstr(s_state.status,"read image failed"));
+    run(1,4,1,7,"VBWWWWX"); assert(strstr(s_state.status,"read image failed"));
     puts("PASS: 14 C6 OTA scenarios (versions, order, delays, failures, partial input)");
     return 0;
 }

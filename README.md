@@ -233,6 +233,8 @@ the new XIAO full image. This XIAO image is not the generic S3 bridge package.
 ### C6 compatibility in subsequent source builds
 
 The branch queries the **running C6 firmware immediately before writing**.
+Below 2.6.0, OTA uses 1024-byte blocks so the protobuf/TLV envelope fits the
+4096-byte receive buffer in 1.4.1. Modern slaves retain 4096-byte blocks.
 Below 2.6.0 (including 1.4.1), legacy `OTAEnd` activates the image and schedules
 the C6 reboot; no `OTAActivate` is sent. The P4 waits eight seconds before
 restarting. From 2.6.0 onward, explicit activation is followed by the existing

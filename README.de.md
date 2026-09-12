@@ -112,6 +112,9 @@ neuen XIAO-Full-Image inhaltsgleich. Nicht mit dem generischen S3-Bridge-Paket v
 ## C6-Kompatibilität in nachfolgenden Quellcode-Builds
 
 Der Branch fragt die **laufende C6-Version unmittelbar vor dem Schreiben** ab.
+Unter 2.6.0 werden 1024-Byte-Blöcke gesendet: Nutzdaten plus Protokollheader
+müssen in den 4096-Byte-Empfangspuffer von 1.4.1 passen. Neuere C6 behalten
+4096-Byte-Blöcke.
 Unter 2.6.0 (auch 1.4.1) aktiviert `OTAEnd` das Image und plant den C6-Neustart;
 ein zusätzliches `OTAActivate` entfällt. Der P4 wartet acht Sekunden bis zu seinem
 Neustart. Ab 2.6.0 wird explizit aktiviert, danach startet der P4 wie bisher nach

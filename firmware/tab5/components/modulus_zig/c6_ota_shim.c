@@ -22,6 +22,8 @@
 
 #define OTA_USB_ROOT "/usb"
 #define OTA_CHUNK_SIZE 4096
+/* 1.4.1 has a 4096-byte RPC buffer including protobuf/TLV overhead. */
+#define OTA_LEGACY_CHUNK_SIZE 1024
 #define OTA_MAX_IMAGE_SIZE (4U * 1024U * 1024U)
 #define OTA_HOST_RESTART_DELAY_MS 3000
 /* Pre-2.6 slaves schedule their own reboot 5 s after OTA end. */
@@ -232,6 +234,7 @@ static void ota_worker(void *arg)
         return;
     }
     const bool explicit_activate = ver.major1 > 2 || (ver.major1 == 2 && ver.minor1 >= 6);
+    const size_t chunk_size = explicit_activate ? OTA_CHUNK_SIZE : OTA_LEGACY_CHUNK_SIZE;
     const unsigned restart_delay_ms = explicit_activate ? OTA_HOST_RESTART_DELAY_MS : OTA_LEGACY_HOST_RESTART_DELAY_MS;
     taskENTER_CRITICAL(&s_lock);
     s_state.c6_connected = true;
@@ -251,7 +254,7 @@ static void ota_worker(void *arg)
     err = f ? ESP_OK : ESP_ERR_NOT_FOUND;
     if (err == ESP_OK) {
         stage = "allocate buffer";
-        buf = malloc(OTA_CHUNK_SIZE);
+        buf = malloc(chunk_size);
         if (!buf) err = ESP_ERR_NO_MEM;
     }
     if (err == ESP_OK) {
@@ -261,7 +264,7 @@ static void ota_worker(void *arg)
     size_t sent = 0;
     while (err == ESP_OK && sent < image_size) {
         size_t want = image_size - sent;
-        if (want > OTA_CHUNK_SIZE) want = OTA_CHUNK_SIZE;
+        if (want > chunk_size) want = chunk_size;
         stage = "read image";
         if (fread(buf, 1, want, f) != want) { err = ESP_FAIL; break; }
         stage = "transfer";
@@ -306,6 +309,7 @@ static void ota_worker(void *arg)
                  stage, (unsigned)sent, (unsigned)image_size, esp_err_to_name(err),
                  activation_uncertain ? "Activation unconfirmed; wait, then check C6 version."
                                       : "Activation not requested. Retry or use C6 USB recovery.");
+        ESP_LOGE(TAG, "%s", msg);
         state_status(MODULUS_C6_OTA_ERROR, msg);
     }
     s_worker_running = false;
