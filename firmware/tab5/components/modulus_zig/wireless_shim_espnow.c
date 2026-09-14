@@ -257,24 +257,16 @@ void modulus_wireless_espnow_check_channel_conflict(void)
     if (ap.primary == bridge_ch) {
         return;
     }
-    /* This used to overwrite en_chan with the AP channel. That is unrecoverable:
-     * the S3 bridge takes a channel only from its own USB console ("channel N")
-     * and has no over-the-air handoff, so it can never follow us — and en_chan
-     * is the only record of where the bridge actually lives. Persisting the AP
-     * channel destroyed it for good (NVS survives reboot) and every unicast
-     * then died with reason=0x01. One radio cannot serve two channels; say so
-     * and leave the bridge channel alone. */
-    static uint8_t s_warned_ap_ch;
-    if (s_warned_ap_ch != ap.primary) {
-        s_warned_ap_ch = ap.primary;
-        ESP_LOGW(TAG, "Wi-Fi AP is ch%u but ESP-NOW bridge is ch%u — one radio "
-                      "cannot serve both. Set the S3 to ch%u (console 'channel %u') "
-                      "or join an AP on ch%u.",
-                 (unsigned)ap.primary, (unsigned)bridge_ch,
-                 (unsigned)ap.primary, (unsigned)ap.primary, (unsigned)bridge_ch);
-    }
-    modulus_espnow_debug_event("chan", "AP ch%u != bridge ch%u",
+    /* A connected STA owns the radio channel.  New S3 firmware hunts for the
+     * Tab5 and latches this channel, so make the effective value and UI agree
+     * with the actual AP channel instead of retaining an impossible setting. */
+    modulus_wireless_espnow_set_channel(ap.primary);
+    s_applied_valid = false;
+    s_bridge_ok = false;
+    modulus_espnow_debug_event("chan", "follow AP ch%u (was ch%u)",
                                (unsigned)ap.primary, (unsigned)bridge_ch);
+    ESP_LOGW(TAG, "ESP-NOW follows Wi-Fi AP channel %u (was %u); S3 will reacquire",
+             (unsigned)ap.primary, (unsigned)bridge_ch);
 }
 
 uint8_t modulus_wireless_espnow_channel(void)
@@ -945,6 +937,13 @@ static void espnow_scan_worker(void *arg)
 
     tab5_pi4ioe_wait_c6_sdio_ready();
 
+    /* A disabled Wi-Fi radio can still inherit an unfinished/saved STA connect
+     * from the hosted C6 startup.  Stop it before hopping channels for ESP-NOW. */
+    if (modulus_nvs_get_u8("wifi", 0) == 0) {
+        (void)esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
     if (ch < 1 || ch > 13) {
         taskENTER_CRITICAL(&s_en_mux);
         strncpy(s_scan_err, "Invalid channel", sizeof(s_scan_err) - 1);
@@ -987,15 +986,26 @@ static void espnow_scan_worker(void *arg)
         sweep_n = espnow_channel_candidates(sweep, (int)sizeof(sweep));
     }
 
-    for (int i = 0; i < sweep_n; i++) {
-        s_scan_probe_ch = sweep[i];
-        modulus_espnow_debug_event("scan", "probe ch%u (%d/%d)", (unsigned)sweep[i], i + 1,
-                                   sweep_n);
-        /* Probe kick is best-effort — window stays open until poll_scan deadline. */
-        if (!modulus_espnow_stack_probe(sweep[i])) {
-            modulus_espnow_debug_event("scan", "probe ch%u send fail", (unsigned)sweep[i]);
+    const int probe_n = modulus_wireless_wifi_is_connected()
+                            ? (ESPNOW_SCAN_WINDOW_MS / ESPNOW_SCAN_DWELL_MS)
+                            : sweep_n;
+    for (int i = 0; i < probe_n; i++) {
+        const int si = i % sweep_n;
+        s_scan_probe_ch = sweep[si];
+        modulus_espnow_debug_event("scan", "probe ch%u (%d/%d)", (unsigned)sweep[si], i + 1,
+                                   probe_n);
+        /* The S3 hops independently.  One packet immediately after changing
+         * channel can always land between two of its dwell windows, so keep
+         * this channel active and emit three probes across the whole dwell. */
+        bool sent = false;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            sent = modulus_espnow_stack_probe(sweep[si]) || sent;
+            vTaskDelay(pdMS_TO_TICKS(75));
         }
-        vTaskDelay(pdMS_TO_TICKS(ESPNOW_SCAN_DWELL_MS));
+        if (!sent) {
+            modulus_espnow_debug_event("scan", "probe ch%u send fail", (unsigned)sweep[si]);
+        }
+        vTaskDelay(pdMS_TO_TICKS(ESPNOW_SCAN_DWELL_MS - 225));
     }
 
     s_scan_probe_ch = 0;

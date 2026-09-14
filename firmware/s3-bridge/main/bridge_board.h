@@ -14,6 +14,7 @@ typedef struct {
     int led_rx;
     int led_on; /* 1 = active high */
     int halt;
+    int rgb_gpio; /* onboard WS2812, -1 if absent */
 } bridge_board_t;
 
 void bridge_board_init(void);

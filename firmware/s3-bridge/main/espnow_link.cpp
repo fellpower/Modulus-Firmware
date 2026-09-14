@@ -30,6 +30,7 @@ static const char* TAG = "espnow";
 /* 2.4 GHz channels 1-13 (Tab5 probe set); ch 14 is JP-only and unused here. */
 static constexpr uint8_t kChannelMin = 1;
 static constexpr uint8_t kChannelMax = 13;
+static constexpr uint8_t kBroadcastMac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 typedef struct {
     uint16_t len;
@@ -54,6 +55,10 @@ static QueueHandle_t         s_outbound_q = nullptr;
 static bool                  s_inbound_worker_started = false;
 static bool                  s_outbound_worker_started = false;
 static bool                  s_heartbeat_task_started = false;
+static bool                  s_channel_hunt_task_started = false;
+static std::atomic<bool>     s_channel_hunting{false};
+static std::atomic<bool>     s_channel_latch_pending{false};
+static std::atomic<uint32_t> s_last_link_ok_tick{0};
 /* MOD_ACK / peer learn must not block inside esp_now recv cb. */
 static portMUX_TYPE          s_ack_spin = portMUX_INITIALIZER_UNLOCKED;
 static bool                  s_ack_pending = false;
@@ -127,14 +132,17 @@ static void register_tab5_peer_locked(const uint8_t* mac)
 
     esp_now_peer_info_t pi = {};
     memcpy(pi.peer_addr, mac, 6);
-    pi.channel = s_channel;
+    /* Channel 0 follows the STA interface's current channel.  The recovery
+     * task deliberately hops 1..13; pinning the peer to the startup channel
+     * makes every outbound hunt packet fail after the first hop. */
+    pi.channel = 0;
     pi.ifidx   = WIFI_IF_STA;
     pi.encrypt = false;
 
     esp_err_t err = esp_now_add_peer(&pi);
     if (err == ESP_OK) {
         apply_peer_rate_11m(mac);
-        ESP_LOGI(TAG, "Tab5 peer registered: %s ch%d rate11M", s_mac_str, s_channel);
+        ESP_LOGI(TAG, "Tab5 peer registered: %s current-channel rate11M", s_mac_str);
     } else {
         ESP_LOGW(TAG, "add_peer failed: %s", esp_err_to_name(err));
     }
@@ -145,7 +153,8 @@ static void learn_tab5_mac(const uint8_t* mac)
     if (!s_peer_mu) return;
 
     xSemaphoreTake(s_peer_mu, portMAX_DELAY);
-    if (s_tab5_known && memcmp(s_tab5_mac, mac, 6) == 0) {
+    const bool latch_channel = s_channel_latch_pending.exchange(false, std::memory_order_acq_rel);
+    if (s_tab5_known && memcmp(s_tab5_mac, mac, 6) == 0 && !latch_channel) {
         xSemaphoreGive(s_peer_mu);
         return;
     }
@@ -158,6 +167,10 @@ static void learn_tab5_mac(const uint8_t* mac)
     xSemaphoreGive(s_peer_mu);
 
     save_tab5_mac();
+    if (latch_channel) {
+        (void)save_channel_nvs(s_channel);
+        ESP_LOGW(TAG, "ESP-NOW reacquired Tab5 on channel %u", (unsigned)s_channel);
+    }
     ESP_LOGI(TAG, "%s Tab5 MAC: %s", first ? "Learned" : "Updated", s_mac_str);
 }
 
@@ -299,6 +312,11 @@ static void on_recv(const esp_now_recv_info_t* info,
         return;
     }
 
+    s_last_link_ok_tick.store((uint32_t)xTaskGetTickCount(), std::memory_order_release);
+    if (s_channel_hunting.exchange(false, std::memory_order_acq_rel)) {
+        s_channel_latch_pending.store(true, std::memory_order_release);
+    }
+
     if (s3_ota_try_handle(info->src_addr, data, static_cast<size_t>(len))) {
         defer_learn_mac(info->src_addr);
         return;
@@ -339,6 +357,17 @@ static void on_sent(const esp_now_send_info_t* info, esp_now_send_status_t statu
 {
     if (status == ESP_NOW_SEND_SUCCESS) {
         s_tx_count.fetch_add(1, std::memory_order_relaxed);
+        const bool tab5_unicast = info && s_tab5_known &&
+                                  memcmp(info->des_addr, s_tab5_mac, 6) == 0;
+        if (tab5_unicast) {
+            s_last_link_ok_tick.store((uint32_t)xTaskGetTickCount(), std::memory_order_release);
+        }
+        if (tab5_unicast && s_channel_hunting.exchange(false, std::memory_order_acq_rel)) {
+            /* Persist a channel found by an outbound hunt as well as one found
+             * by an inbound Tab5 probe. NVS work remains outside the callback. */
+            s_channel_latch_pending.store(true, std::memory_order_release);
+            defer_learn_mac(info->des_addr);
+        }
     } else {
         s_fail_count.fetch_add(1, std::memory_order_relaxed);
         if (info) {
@@ -428,12 +457,9 @@ void espnow_init()
 
     uint8_t my_mac[6];
     esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
-    printf("\r\n=====================================================\r\n");
-    printf("  S3 UART Bridge MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
-           my_mac[0], my_mac[1], my_mac[2], my_mac[3], my_mac[4], my_mac[5]);
-    printf("  -> Tab5 Settings > Wireless > ESP-NOW peer\r\n");
-    printf("  ESP-NOW channel : %d (must match Tab5)\r\n", s_channel);
-    printf("=====================================================\r\n\r\n");
+    ESP_LOGI(TAG, "S3 MAC %02X:%02X:%02X:%02X:%02X:%02X channel %u",
+             my_mac[0], my_mac[1], my_mac[2], my_mac[3], my_mac[4], my_mac[5],
+             (unsigned)s_channel);
 
     s_tx_lock = xSemaphoreCreateMutex();
     s_tx_done = xSemaphoreCreateBinary();
@@ -448,6 +474,14 @@ void espnow_init()
     ESP_ERROR_CHECK(esp_now_init());
     ESP_ERROR_CHECK(esp_now_register_recv_cb(on_recv));
     ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
+
+    /* Broadcast discovery follows the channel selected by the recovery hunt. */
+    esp_now_peer_info_t broadcast = {};
+    memcpy(broadcast.peer_addr, kBroadcastMac, sizeof(kBroadcastMac));
+    broadcast.channel = 0;
+    broadcast.ifidx = WIFI_IF_STA;
+    broadcast.encrypt = false;
+    ESP_ERROR_CHECK(esp_now_add_peer(&broadcast));
 
     if (s_tab5_known) {
         xSemaphoreTake(s_peer_mu, portMAX_DELAY);
@@ -470,10 +504,43 @@ static void heartbeat_task(void*)
 {
     static const uint8_t heartbeat[] = BRIDGE_MOD_HEARTBEAT;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
         /* Side-band liveness only: never enters either UART queue. The normal
          * ESP-NOW TX mutex serializes it with CNC traffic and OTA packets. */
         (void)espnow_send_to_tab5(heartbeat, BRIDGE_MOD_HEARTBEAT_LEN);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
+static void channel_hunt_task(void*)
+{
+    uint8_t candidate = s_channel;
+    for (;;) {
+        const uint32_t now = (uint32_t)xTaskGetTickCount();
+        const uint32_t last = s_last_link_ok_tick.load(std::memory_order_acquire);
+        if ((uint32_t)(now - last) < pdMS_TO_TICKS(5000)) {
+            s_channel_hunting.store(false, std::memory_order_release);
+            vTaskDelay(pdMS_TO_TICKS(250));
+            continue;
+        }
+
+        s_channel_hunting.store(true, std::memory_order_release);
+        candidate = candidate >= kChannelMax ? kChannelMin : (uint8_t)(candidate + 1);
+        /* Do not move the radio while another task waits for an ESP-NOW TX
+         * callback. Channel hunting must never corrupt normal CNC traffic. */
+        if (xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (esp_wifi_set_channel(candidate, WIFI_SECOND_CHAN_NONE) == ESP_OK) {
+                s_channel = candidate;
+            }
+            xSemaphoreGive(s_tx_lock);
+        }
+        /* Probe the saved Tab5 on every candidate. A two-second heartbeat
+         * alone only overlaps one of thirteen short dwell windows by chance. */
+        static const uint8_t heartbeat[] = BRIDGE_MOD_HEARTBEAT;
+        (void)espnow_send_to_tab5(heartbeat, BRIDGE_MOD_HEARTBEAT_LEN);
+        (void)espnow_send_chunk(kBroadcastMac, heartbeat, BRIDGE_MOD_HEARTBEAT_LEN);
+        /* Tab5 repeats discovery on its AP channel for five seconds, so a
+         * 180 ms dwell guarantees several rendezvous opportunities. */
+        vTaskDelay(pdMS_TO_TICKS(180));
     }
 }
 
@@ -495,6 +562,14 @@ void espnow_start_inbound_worker()
             s_heartbeat_task_started = true;
         } else {
             ESP_LOGW(TAG, "heartbeat task create failed");
+        }
+    }
+    if (!s_channel_hunt_task_started) {
+        if (xTaskCreatePinnedToCore(channel_hunt_task, "espnow_hunt",
+                                    3072, nullptr, 4, nullptr, 1) == pdPASS) {
+            s_channel_hunt_task_started = true;
+        } else {
+            ESP_LOGW(TAG, "channel hunt task create failed");
         }
     }
 }
@@ -589,4 +664,15 @@ uint32_t espnow_outbound_drops()
 uint32_t espnow_outbound_pending()
 {
     return s_outbound_q ? uxQueueMessagesWaiting(s_outbound_q) : 0;
+}
+
+bool espnow_channel_hunting()
+{
+    return s_channel_hunting.load(std::memory_order_acquire);
+}
+
+uint32_t espnow_last_link_age_ms()
+{
+    const uint32_t last = s_last_link_ok_tick.load(std::memory_order_acquire);
+    return (uint32_t)(xTaskGetTickCount() - last) * portTICK_PERIOD_MS;
 }

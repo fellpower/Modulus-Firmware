@@ -8,7 +8,7 @@ set(CMAKE_C_USE_RESPONSE_FILE_FOR_OBJECTS 1)
 set(CMAKE_CXX_USE_RESPONSE_FILE_FOR_OBJECTS 1)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(PROJECT_VER "3.1.4-dev")
+set(PROJECT_VER "3.1.4")
 project(modulus_tab5)
 
 # Zig UI engine owns the panel: no LVGL display, indev, port task or draw

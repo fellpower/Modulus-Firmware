@@ -6,6 +6,7 @@ idf_component_register(
         "uart_bridge.cpp"
         "halt_gpio.cpp"
         "bridge_board.cpp"
+        "status_rgb.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         nvs_flash
@@ -14,8 +15,11 @@ idf_component_register(
         esp_netif
         esp_timer
         esp_driver_uart
+        esp_driver_usb_serial_jtag
         esp_driver_gpio
         app_update
+        espcoredump
         freertos
         log
+        led_strip
 )

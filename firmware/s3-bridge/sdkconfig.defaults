@@ -37,9 +37,18 @@ CONFIG_FREERTOS_HZ=1000
 # NVS for persistent settings
 CONFIG_NVS_ENCRYPTION=n
 
-# Shell on native USB (XIAO USB-C / S3 USB Serial/JTAG) so UART1 can use GPIO43/44
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y
+# Keep a post-mortem crash image in the existing coredump partition. `diag`
+# reports its flash address/size so a field unit can be diagnosed afterwards.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=16
+CONFIG_ESP_COREDUMP_LOGS=n
+CONFIG_ESP_COREDUMP_STACK_SIZE=1792
+
+# The Modulus/DevKit profile exposes UART0 through its USB-UART bridge. This
+# keeps diagnostics available on boards whose USB socket is not native USB.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 
 # Default board when NVS has no `board` key. Runtime: USB shell `board mini1|xiao`
 CONFIG_S3_BRIDGE_BOARD_MINI1=y

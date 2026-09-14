@@ -48,8 +48,8 @@ void modulus_wireless_poll(void);
 bool modulus_wireless_radio_op_try_take(uint32_t timeout_ms);
 void modulus_wireless_radio_op_give(void);
 
-/** Warn when the joined AP's channel differs from the ESP-NOW bridge channel.
- *  Never rewrites en_chan — the S3 bridge cannot follow a channel change. */
+/** Follow the joined AP's channel and persist it for ESP-NOW. The S3 bridge
+ *  hunts channels after link loss and re-latches on the Tab5 there. */
 void modulus_wireless_espnow_check_channel_conflict(void);
 
 /* ── Wi-Fi ─────────────────────────────────────────────────────── */

@@ -225,7 +225,16 @@ pub fn loadPrefs(p: *settings_prefs.Prefs) void {
     p.wireless.espnow = getU8(keys.espnow, @intFromBool(p.wireless.espnow)) != 0;
     p.wireless.zigbee = getU8(keys.zigbee, @intFromBool(p.wireless.zigbee)) != 0;
     p.wireless.thread = getU8(keys.thread, @intFromBool(p.wireless.thread)) != 0;
-    p.wireless.ant_ext = getU8(keys.ant_ext, @intFromBool(p.wireless.ant_ext)) != 0;
+    // Older builds could leave the UI preference and the antenna hardware
+    // selection out of sync. Migrate once to the safe/default PCB antenna.
+    // Subsequent explicit menu changes continue to persist through ant_ext.
+    if (getU8("ant_ui1", 0) == 0) {
+        p.wireless.ant_ext = false;
+        setU8(keys.ant_ext, 0);
+        setU8("ant_ui1", 1);
+    } else {
+        p.wireless.ant_ext = getU8(keys.ant_ext, @intFromBool(p.wireless.ant_ext)) != 0;
+    }
     p.wireless.wf_auto = getU8(keys.wf_auto, @intFromBool(p.wireless.wf_auto)) != 0;
     p.wireless.wf_arecon = getU8(keys.wf_arecon, @intFromBool(p.wireless.wf_arecon)) != 0;
     p.wireless.wf_dhcp = getU8(keys.wf_dhcp, @intFromBool(p.wireless.wf_dhcp)) != 0;

@@ -36,6 +36,8 @@ uint32_t espnow_inbound_drops();
 uint32_t espnow_inbound_pending();
 uint32_t espnow_outbound_drops();
 uint32_t espnow_outbound_pending();
+bool     espnow_channel_hunting();
+uint32_t espnow_last_link_age_ms();
 
 #ifdef __cplusplus
 }

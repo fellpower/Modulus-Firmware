@@ -15,17 +15,17 @@ static const char *TAG = "board";
 /* Pin order: UART TX, RX, LED TX, LED RX, LED active-high, HALT.
  * UART1 to grblHAL. Shell is USB Serial/JTAG. Avoid GPIO33-37 on octal-PSRAM S3. */
 static const bridge_board_t kBoards[] = {
-    { "mini1", "Modulus", "ESP32-S3-MINI-1 handwheel", 8, 9, 45, 46, 1, 37 },
-    { "ws-s3-zero", "Waveshare", "ESP32-S3-Zero (SKU 25081 / 33879)", 43, 44, -1, -1, 1, 1 },
-    { "s3-supermini", "Generic", "ESP32-S3 Super Mini", 43, 44, -1, -1, 1, 1 },
-    { "qtpy-s3", "Adafruit", "QT Py ESP32-S3 (no PSRAM)", 5, 16, -1, -1, 1, 8 },
-    { "feather-s3", "Adafruit", "Feather ESP32-S3 (2MB PSRAM)", 39, 38, 13, 13, 1, 5 },
-    { "feather-s3-np", "Adafruit", "Feather ESP32-S3 (no PSRAM)", 39, 38, 13, 13, 1, 5 },
-    { "xiao", "Seeed", "XIAO ESP32-S3", 43, 44, 21, 21, 0, 1 },
-    { "xiao-plus", "Seeed", "XIAO ESP32-S3 Plus", 43, 44, 1, 1, 1, 2 },
-    { "um-feathers3", "Unexpected Maker", "FeatherS3", 43, 44, 13, 13, 1, 1 },
-    { "um-tinys3", "Unexpected Maker", "TinyS3", 43, 44, -1, -1, 1, 1 },
-    { "s3-devkitm1", "Espressif", "ESP32-S3-DevKitM-1", 17, 18, -1, -1, 1, 1 },
+    { "mini1", "Modulus", "ESP32-S3-MINI-1 handwheel", 8, 9, 45, 46, 1, 37, 48 },
+    { "ws-s3-zero", "Waveshare", "ESP32-S3-Zero (SKU 25081 / 33879)", 43, 44, -1, -1, 1, 1, -1 },
+    { "s3-supermini", "Generic", "ESP32-S3 Super Mini", 43, 44, -1, -1, 1, 1, 48 },
+    { "qtpy-s3", "Adafruit", "QT Py ESP32-S3 (no PSRAM)", 5, 16, -1, -1, 1, 8, -1 },
+    { "feather-s3", "Adafruit", "Feather ESP32-S3 (2MB PSRAM)", 39, 38, 13, 13, 1, 5, -1 },
+    { "feather-s3-np", "Adafruit", "Feather ESP32-S3 (no PSRAM)", 39, 38, 13, 13, 1, 5, -1 },
+    { "xiao", "Seeed", "XIAO ESP32-S3", 43, 44, 21, 21, 0, 1, -1 },
+    { "xiao-plus", "Seeed", "XIAO ESP32-S3 Plus", 43, 44, 1, 1, 1, 2, -1 },
+    { "um-feathers3", "Unexpected Maker", "FeatherS3", 43, 44, 13, 13, 1, 1, -1 },
+    { "um-tinys3", "Unexpected Maker", "TinyS3", 43, 44, -1, -1, 1, 1, -1 },
+    { "s3-devkitm1", "Espressif", "ESP32-S3-DevKitM-1", 17, 18, -1, -1, 1, 1, 48 },
 };
 
 static int s_idx;
@@ -106,6 +106,7 @@ void bridge_board_print_list(void)
         } else {
             printf("LED=%d/%d\r\n", b->led_tx, b->led_rx);
         }
+        if (b->rgb_gpio >= 0) printf("                   RGB status=GPIO%d\r\n", b->rgb_gpio);
     }
     printf("  Current: %s\r\n\r\n", kBoards[s_idx].id);
 }

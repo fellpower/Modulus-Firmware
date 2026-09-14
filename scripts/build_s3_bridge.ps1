@@ -63,6 +63,11 @@ try {
         }
         "fullclean" {
             idf.py fullclean
+            # sdkconfig is generated state. Remove it so the next build really
+            # applies the selected board overlay (console and pin profile).
+            if (Test-Path -LiteralPath "sdkconfig") {
+                Remove-Item -LiteralPath "sdkconfig" -Force
+            }
         }
         "build" {
             if (-not (Test-Path "sdkconfig")) {

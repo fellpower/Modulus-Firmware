@@ -460,12 +460,9 @@ void uart_bridge_init()
     espnow_start_inbound_worker();
     xTaskCreatePinnedToCore(uart_rx_task, "uart_rx",
                             4096, NULL, 8, NULL, 1);
-    printf("  UART%d  %lu baud  TX=GPIO%d  RX=GPIO%d\r\n",
-           UART_PORT_NUM, static_cast<unsigned long>(s_baud), s_tx_gpio, s_rx_gpio);
-    printf("  Match grblHAL USART to this baud\r\n");
-    printf("  UART batch trigger: %lu ms  LEDs: %s\r\n\r\n",
-           static_cast<unsigned long>(s_batch_ms.load(std::memory_order_relaxed)),
-           s_led_en.load(std::memory_order_relaxed) ? "on" : "off");
+    ESP_LOGI(TAG, "UART%d ready %lu baud GPIO%d/%d batch %lu ms",
+             UART_PORT_NUM, static_cast<unsigned long>(s_baud), s_tx_gpio, s_rx_gpio,
+             static_cast<unsigned long>(s_batch_ms.load(std::memory_order_relaxed)));
 }
 
 uint32_t uart_bridge_baud()     { return s_baud; }

@@ -661,6 +661,13 @@ static bool wireless_host_init(bool aggressive)
         return false;
     }
 
+    /* Earlier builds could leave the C-side antenna preference out of sync
+     * with the Settings UI.  Migrate once to the safe/default PCB antenna;
+     * later explicit menu changes keep persisting through ant_ext. */
+    if (modulus_nvs_get_u8("ant_pcb1", 0) == 0) {
+        modulus_nvs_set_u8("ant_ext", 0);
+        modulus_nvs_set_u8("ant_pcb1", 1);
+    }
     s_ext_antenna = modulus_nvs_get_u8("ant_ext", 0) != 0;
     tab5_pi4ioe_set_ext_antenna_enable(s_ext_antenna);
     ESP_LOGI(TAG, "Antenna: %s (PI4IOE1 P0)", s_ext_antenna ? "external MMCX" : "internal PCB");
@@ -746,7 +753,13 @@ void modulus_wireless_restore_settings(void)
             }
         }
         if (espnow_on) {
-            modulus_wireless_espnow_enable();
+            if (modulus_wireless_espnow_enable()) {
+                /* Also make an unattended/recovered unit discoverable: the S3
+                 * may have moved channels while the Tab5 was off.  The scan
+                 * worker is asynchronous and refuses to run when the CNC
+                 * transport is already open. */
+                (void)modulus_wireless_espnow_scan_start();
+            }
         }
     }
     if (modulus_nvs_get_u8("thread", 0) != 0 && modulus_wireless_thread_supported()) {

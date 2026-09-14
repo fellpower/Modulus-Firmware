@@ -7,32 +7,50 @@
 #include "espnow_link.h"
 #include "uart_bridge.h"
 #include "halt_gpio.h"
+#include "status_rgb.h"
 
 #include <nvs_flash.h>
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <esp_ota_ops.h>
+#include <esp_app_desc.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <esp_timer.h>
+#include <esp_wifi.h>
+#include <esp_core_dump.h>
+#include <driver/usb_serial_jtag.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <driver/uart.h>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cstdarg>
+
+static int shell_printf(const char* format, ...)
+{
+    char buf[768];
+    va_list args;
+    va_start(args, format);
+    const int needed = vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    if (needed <= 0) return needed;
+    const size_t count = static_cast<size_t>(needed) < sizeof(buf)
+                             ? static_cast<size_t>(needed)
+                             : sizeof(buf) - 1;
+    return usb_serial_jtag_write_bytes(buf, count, pdMS_TO_TICKS(100));
+}
+
+#define printf shell_printf
 
 static bool print_boot_self_check()
 {
     bool espnow_ok = espnow_self_check();
     bool uart_ok = uart_bridge_self_check();
     bool all_ok = espnow_ok && uart_ok;
-
-    printf("--- Boot self-check ---\r\n");
-    printf("  ESP-NOW stack    : %s (ch %d, queue depth %d)\r\n",
-           espnow_ok ? "PASS" : "FAIL",
-           espnow_get_channel(), ESPNOW_QUEUE_DEPTH);
-    printf("  UART bridge      : %s (TX=GPIO%d RX=GPIO%d)\r\n",
-           uart_ok ? "PASS" : "FAIL",
-           uart_bridge_tx_gpio(), uart_bridge_rx_gpio());
-    printf("  Overall          : %s\r\n\r\n", all_ok ? "PASS" : "FAIL");
+    ESP_LOGI("main", "self-check ESP-NOW=%s UART=%s",
+             espnow_ok ? "PASS" : "FAIL", uart_ok ? "PASS" : "FAIL");
     return all_ok;
 }
 
@@ -133,7 +151,47 @@ static void print_help()
     printf("  led on|off                   - activity LED pulses\r\n");
     printf("  stats reset                  - clear traffic / fail counters\r\n");
     printf("  status                       - config, counters, link health\r\n");
+    printf("  diag                         - copyable build/crash/link diagnostics\r\n");
+    printf("  coredump clear               - erase saved crash image after collection\r\n");
     printf("  help                         - this list\r\n\r\n");
+}
+
+static void print_diag()
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+    uint8_t primary = 0;
+    wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
+    (void)esp_wifi_get_channel(&primary, &secondary);
+    printf("\r\n=== MODULUS S3 DIAGNOSTICS ===\r\n");
+    printf("  App version       : %s\r\n", app ? app->version : "unknown");
+    printf("  ELF SHA256        : ");
+    if (app) for (unsigned i = 0; i < sizeof(app->app_elf_sha256); ++i) printf("%02x", app->app_elf_sha256[i]);
+    printf("\r\n  Board             : %s\r\n", bridge_board_get()->id);
+    printf("  Reset reason      : %d\r\n", (int)esp_reset_reason());
+    size_t core_addr = 0;
+    size_t core_size = 0;
+    const esp_err_t core_rc = esp_core_dump_image_get(&core_addr, &core_size);
+    if (core_rc == ESP_OK) {
+        printf("  Saved coredump    : yes, address 0x%08x, %u bytes\r\n",
+               (unsigned)core_addr, (unsigned)core_size);
+    } else {
+        printf("  Saved coredump    : no\r\n");
+    }
+    printf("  Uptime            : %llu ms\r\n", (unsigned long long)(esp_timer_get_time() / 1000));
+    printf("  Heap free/min     : %u / %u bytes\r\n", (unsigned)esp_get_free_heap_size(),
+           (unsigned)esp_get_minimum_free_heap_size());
+    printf("  Radio channel     : %u\r\n", (unsigned)primary);
+    printf("  Channel hunting   : %s\r\n", espnow_channel_hunting() ? "yes" : "no");
+    printf("  Last link age     : %lu ms\r\n", (unsigned long)espnow_last_link_age_ms());
+    printf("  Tab5 MAC          : %s\r\n", espnow_tab5_mac_str());
+    printf("  RX/TX/fail        : %lu / %lu / %lu\r\n", (unsigned long)espnow_rx_count(),
+           (unsigned long)espnow_tx_count(), (unsigned long)espnow_fail_count());
+    printf("  Queue in/out/drop : %lu / %lu / %lu+%lu\r\n",
+           (unsigned long)espnow_inbound_pending(), (unsigned long)espnow_outbound_pending(),
+           (unsigned long)espnow_inbound_drops(), (unsigned long)espnow_outbound_drops());
+    printf("  UART baud TX/RX   : %lu GPIO%d/GPIO%d\r\n", (unsigned long)uart_bridge_baud(),
+           uart_bridge_tx_gpio(), uart_bridge_rx_gpio());
+    printf("=== END DIAGNOSTICS ===\r\n");
 }
 
 static void handle_command(const char* line)
@@ -144,6 +202,18 @@ static void handle_command(const char* line)
 
     if (strcmp(cmd, "status") == 0) {
         print_status();
+
+    } else if (strcmp(cmd, "diag") == 0) {
+        print_diag();
+
+    } else if (strcmp(cmd, "coredump") == 0) {
+        if (strcmp(arg, "clear") == 0) {
+            const esp_err_t rc = esp_core_dump_image_erase();
+            printf("  Saved coredump erase: %s\r\n", esp_err_to_name(rc));
+        } else {
+            printf("  Use: coredump clear\r\n");
+            return;
+        }
 
     } else if (strcmp(cmd, "help") == 0) {
         print_help();
@@ -260,15 +330,15 @@ static void shell_task(void* arg)
     char line[64];
     int  pos = 0;
 
-    printf("\r\nS3 ESP-NOW <-> UART Bridge  board=%s  (type 'board' or 'help')\r\n",
+    printf("\r\nS3 bridge ready (%s). Type 'diag' or 'help'.\r\n",
            bridge_board_get()->id);
-    print_status();
     printf("> ");
     fflush(stdout);
 
     while (1) {
-        int ch = fgetc(stdin);
-        if (ch == EOF) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        uint8_t byte = 0;
+        if (usb_serial_jtag_read_bytes(&byte, 1, pdMS_TO_TICKS(20)) != 1) continue;
+        const int ch = byte;
 
         if (ch == '\r' || ch == '\n') {
             if (pos == 0) {
@@ -291,7 +361,8 @@ static void shell_task(void* arg)
             fflush(stdout);
         } else if (ch >= 0x20 && pos < (int)(sizeof(line) - 1)) {
             line[pos++] = (char)ch;
-            fputc(ch, stdout);
+            const uint8_t echo = (uint8_t)ch;
+            (void)usb_serial_jtag_write_bytes(&echo, 1, pdMS_TO_TICKS(20));
             fflush(stdout);
         }
     }
@@ -300,6 +371,18 @@ static void shell_task(void* arg)
 // ── app_main ─────────────────────────────────────────────────────────────────
 extern "C" void app_main()
 {
+    if (!usb_serial_jtag_is_driver_installed()) {
+        usb_serial_jtag_driver_config_t usb_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+        usb_cfg.tx_buffer_size = 2048;
+        usb_cfg.rx_buffer_size = 512;
+        ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
+    }
+
+    /* This CH343 board's application UART can stop draining while Wi-Fi is
+     * starting.  Keep background logging off so diagnostics can be requested
+     * explicitly without blocking radio/task startup. */
+    esp_log_level_set("*", ESP_LOG_NONE);
+
     /* NVS - must initialise before any component reads settings */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
@@ -319,10 +402,12 @@ extern "C" void app_main()
     espnow_init();
 
     bridge_board_init();
+    status_rgb_start();
     halt_gpio_init();
 
     /* Initialise UART bridge (sets up driver + RX task) */
     uart_bridge_init();
+    status_rgb_mark_runtime_ready();
 
     const bool boot_self_check_ok = print_boot_self_check();
 

@@ -58,6 +58,7 @@ var g_prev_bt_on: bool = false;
 var g_last_espnow: u8 = 255;
 var g_last_zb: u8 = 255;
 var g_last_th: u8 = 255;
+var g_last_ant_ext: u8 = 255;
 
 fn applyTone(p: *const settings_prefs.Prefs) void {
     if (p.audio.tone_prof == g_last_tone) return;
@@ -82,6 +83,13 @@ fn applyWirelessRadios(p: *settings_prefs.Prefs) void {
     const en: u8 = @intFromBool(p.wireless.espnow);
     const zb: u8 = @intFromBool(p.wireless.zigbee);
     const th: u8 = @intFromBool(p.wireless.thread);
+    const ant_ext: u8 = @intFromBool(p.wireless.ant_ext);
+    if (ant_ext != g_last_ant_ext) {
+        g_last_ant_ext = ant_ext;
+        // The setting shown in the Zig UI is authoritative. This also repairs
+        // older installs whose C-side mirror said MMCX while the UI said PCB.
+        c.modulus_wireless_set_antenna_external(p.wireless.ant_ext);
+    }
     if (wi != g_last_wifi) {
         g_last_wifi = wi;
         if (p.wireless.wifi) {
@@ -381,6 +389,9 @@ pub fn wirelessPoll(eng: *Engine) void {
 
     w.en_tx = c.modulus_wireless_espnow_tx_count();
     w.en_rx = c.modulus_wireless_espnow_rx_count();
+    // The C6 may follow the joined Wi-Fi AP to a different channel. Mirror
+    // that live value so the settings page shows where ESP-NOW really is.
+    if (!g_prefs_dirty) w.en_chan = c.modulus_wireless_espnow_channel();
     syncEspnowSaved(eng);
 
     const was_zb_pending = w.zb_join_pending;

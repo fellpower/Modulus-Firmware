@@ -47,7 +47,8 @@ static bool pin_reserved(int gpio)
     if (gpio == 0 || gpio == 19 || gpio == 20 || (gpio >= 26 && gpio <= 37) ||
         gpio == 45 || gpio == 46) return true;
     const bridge_board_t *board = bridge_board_get();
-    return board && (gpio == board->led_tx || gpio == board->led_rx || gpio == board->halt);
+    return board && (gpio == board->led_tx || gpio == board->led_rx ||
+                     gpio == board->halt || gpio == board->rgb_gpio);
 }
 
 static bool uart_config_valid(const mod_s3_uart_config_t *cfg)

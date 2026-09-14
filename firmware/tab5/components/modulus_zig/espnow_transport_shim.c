@@ -673,6 +673,12 @@ bool modulus_espnow_stack_probe(uint8_t channel)
         channel = 1;
     }
 
+    /* Reassert before every probe.  The hosted C6 may still be finishing an
+     * old STA operation, which can move the PHY after the broadcast peer was
+     * added and would otherwise make esp_now_send fail with CHAN (0x306d). */
+    if (!modulus_espnow_stack_lock_channel(channel)) {
+        return false;
+    }
     if (!espnow_peer_cache_hit(k_bcast, channel, false)) {
         (void)modulus_espnow_stack_del_peer(k_bcast);
         if (!modulus_espnow_stack_add_peer(k_bcast, channel, false)) {
