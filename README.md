@@ -3,6 +3,14 @@
 </p>
 
 <p align="center">
+  <a href="https://www.youtube.com/watch?v=mvP2etHl_e0">
+    <img src="https://img.youtube.com/vi/mvP2etHl_e0/maxresdefault.jpg" alt="Watch the Modulus project video on YouTube" width="720">
+  </a>
+</p>
+
+<p align="center"><strong><a href="https://www.youtube.com/watch?v=mvP2etHl_e0">Watch the Modulus project video</a></strong></p>
+
+<p align="center">
   <strong>English</strong> · <a href="README.de.md">Deutsch</a>
 </p>
 

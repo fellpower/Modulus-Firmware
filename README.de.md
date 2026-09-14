@@ -2,6 +2,14 @@
   <img src="assets/modulus-firmware-hero.png" alt="Modulus Firmware – Tab5 CNC-Pendant" width="720">
 </p>
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=mvP2etHl_e0">
+    <img src="https://img.youtube.com/vi/mvP2etHl_e0/maxresdefault.jpg" alt="Modulus-Projektvideo auf YouTube ansehen" width="720">
+  </a>
+</p>
+
+<p align="center"><strong><a href="https://www.youtube.com/watch?v=mvP2etHl_e0">Modulus-Projektvideo ansehen</a></strong></p>
+
 [English](README.md) · **Deutsch**
 
 # Modulus Firmware
