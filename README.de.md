@@ -12,6 +12,15 @@ Modulus macht das M5Stack Tab5 zum CNC-Pendant. Der P4 übernimmt Oberfläche un
 Steuerungslogik, der C6 WLAN und ESP-NOW. Eine S3-Bridge verbindet das Pendant mit
 der CNC-Steuerung. NanoH2 ist der optionale Zigbee-Hub.
 
+## Verbindungs- und Pinübersicht
+
+Die Grafik zeigt die kabelgebundenen Busse, Funkstrecken, Versorgung und die
+aktuell verwendeten GPIOs von Tab5, NanoH2, S3-Bridge und externem Zigbee-Node.
+Die dargestellte Relaisanbindung über den ULN2803A ist geplant und noch nicht
+an der Hardware getestet.
+
+![Modulus Verbindungs- und Pinübersicht](assets/modulus-connection-pin-overview.png)
+
 ## Erstinstallation
 
 Die fertigen Dateien stehen im [Release v3.1.3-ota](https://github.com/fellpower/Modulus-Firmware-C6-OTA/releases/tag/v3.1.3-ota).

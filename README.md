@@ -64,6 +64,13 @@ Most M5 projects cram UI and radio onto one busy chip. Modulus uses Tab5 as desi
 
 ## Four-firmware architecture
 
+The following overview shows the wired buses, radio links, power connection,
+and the GPIO assignments currently used by the Tab5, NanoH2, S3 bridge, and
+external Zigbee node. The ULN2803A relay connection is planned and still awaits
+the hardware test.
+
+![Modulus connection and pin overview](assets/modulus-connection-pin-overview.png)
+
 ```
                  [Operator touch UI + MPG wheel]
                               │
