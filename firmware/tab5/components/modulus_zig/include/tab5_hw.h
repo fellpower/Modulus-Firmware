@@ -50,12 +50,12 @@
 #define TAB5_RS485_RX_GPIO      21
 #define TAB5_RS485_DE_GPIO      34
 
-/* NanoH2 Zigbee hub link — UART2 on M5BUS pins 16/15 (silkscreen TXD2/RXD2).
+/* NanoH2 Zigbee hub link — UART2 on Tab5 M5BUS pins 16/15 (PC_TX/PC_RX).
  * GPIO6 is shared with the COM.X STAMP pad net (xMOD_RX_GPIO6) — fine while
  * no STAMP module is fitted. UART0 = console, UART1 = RS-485. */
 #define TAB5_ZB_UART            2
-#define TAB5_ZB_UART_TX_GPIO    6  /* M5BUS pin 16 G14/TXD2 -> H2 Grove G2 (RX) */
-#define TAB5_ZB_UART_RX_GPIO    7  /* M5BUS pin 15 G13/RXD2 <- H2 Grove G1 (TX) */
+#define TAB5_ZB_UART_TX_GPIO    6  /* M5BUS pin 16 G6/PC_TX -> H2 Grove G2 (RX) */
+#define TAB5_ZB_UART_RX_GPIO    7  /* M5BUS pin 15 G7/PC_RX <- H2 Grove G1 (TX) */
 
 /* Port A alternate — TWAI/CAN transport shares G53/G54 with I2C1 (mutually exclusive) */
 #define TAB5_PORT_A_CAN_TX_GPIO TAB5_EXT_I2C_SCL_GPIO

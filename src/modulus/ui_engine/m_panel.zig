@@ -18,6 +18,7 @@ pub const ToolId = enum(u8) {
     zigbee = 4,
     c6_update = 5,
     s3_update = 6,
+    nano_update = 7,
 };
 
 pub const Tool = struct {
@@ -33,8 +34,9 @@ pub const tools = [_]Tool{
     .{ .label = "Probe", .icon = .arrow_down },
     .{ .label = "SD Card", .icon = .hard_drives },
     .{ .label = "Zigbee", .icon = .broadcast },
-    .{ .label = "C6", .icon = .cpu },
+    .{ .label = "Internal C6", .icon = .cpu },
     .{ .label = "S3", .icon = .cpu },
+    .{ .label = "NanoH2", .icon = .cpu },
 };
 
 pub fn toolEnabled(index: u8, usb_host: bool) bool {
@@ -42,7 +44,7 @@ pub fn toolEnabled(index: u8, usb_host: bool) bool {
     return !tools[index].requires_usb or usb_host;
 }
 
-pub const cols: i32 = 5;
+pub const cols: i32 = 4;
 pub const visible_rows: i32 = 2;
 const icon_px: i32 = 32;
 const tile_h: i32 = 88;

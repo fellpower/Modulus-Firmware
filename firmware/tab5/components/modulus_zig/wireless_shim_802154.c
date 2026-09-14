@@ -146,10 +146,44 @@ static void zb_load_nvs(void)
         }
         w++;
     }
-    if (w != s_zb_dev_n) {
-        s_zb_dev_n = w;
-        zb_save_nvs();
+    bool registry_changed = w != s_zb_dev_n;
+    s_zb_dev_n = w;
+
+    /* Repair Modulus-node endpoint rows saved by older builds.  The presence
+     * of endpoint 242 plus one of our channel endpoints (10..13) on the same
+     * IEEE is the signature of one node, not several independent devices. */
+    for (int base = 0; base < s_zb_dev_n; ++base) {
+        bool has_gp = false;
+        bool has_channel = false;
+        for (int i = base; i < s_zb_dev_n; ++i) {
+            if (strcmp(s_zb_devs[i].id, s_zb_devs[base].id) != 0) continue;
+            has_gp |= s_zb_devs[i].endpoint == 242;
+            has_channel |= s_zb_devs[i].endpoint >= 10 && s_zb_devs[i].endpoint <= 13;
+        }
+        if (!has_gp || !has_channel) continue;
+
+        modulus_zb_device_t merged = s_zb_devs[base];
+        for (int i = base; i < s_zb_dev_n; ++i) {
+            if (strcmp(s_zb_devs[i].id, merged.id) != 0) continue;
+            merged.caps |= s_zb_devs[i].caps;
+            if (merged.endpoint == 1 || merged.endpoint == 242) {
+                if (s_zb_devs[i].endpoint >= 10 && s_zb_devs[i].endpoint <= 13)
+                    merged.endpoint = s_zb_devs[i].endpoint;
+            }
+            if (strncmp(merged.name, "Endpoint ", 9) == 0 &&
+                strncmp(s_zb_devs[i].name, "Endpoint ", 9) != 0)
+                strncpy(merged.name, s_zb_devs[i].name, sizeof(merged.name) - 1);
+        }
+        s_zb_devs[base] = merged;
+        for (int i = s_zb_dev_n - 1; i > base; --i) {
+            if (strcmp(s_zb_devs[i].id, merged.id) != 0) continue;
+            for (int j = i; j + 1 < s_zb_dev_n; ++j) s_zb_devs[j] = s_zb_devs[j + 1];
+            --s_zb_dev_n;
+        }
+        registry_changed = true;
+        ESP_LOGI(TAG, "Merged Modulus node %s endpoint rows", merged.id);
     }
+    if (registry_changed) zb_save_nvs();
 }
 
 static void zb_save_nvs(void)
@@ -223,6 +257,9 @@ static void zb_scan_note(const char *id, int8_t rssi)
             if (rssi > s_zb_scan[i].rssi) {
                 s_zb_scan[i].rssi = rssi;
             }
+            if (s_zb_scan_active) {
+                s_zb_scan_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
+            }
             taskEXIT_CRITICAL(&s_mux);
             return;
         }
@@ -234,6 +271,11 @@ static void zb_scan_note(const char *id, int8_t rssi)
         snprintf(d->name, sizeof(d->name), "Dev %.8s", id);
         d->endpoint = 1;
         d->rssi = rssi;
+        if (s_zb_scan_active) {
+            /* Leave one second for interview/capability events, then close the
+             * permit window instead of making the user wait the full minute. */
+            s_zb_scan_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(1000);
+        }
     }
     taskEXIT_CRITICAL(&s_mux);
 }
@@ -304,6 +346,7 @@ static void th_scan_finish(void)
 void modulus_wireless_802154_poll(void)
 {
     static bool loaded;
+    static TickType_t last_empty_refresh;
     if (!loaded) {
         zb_load_nvs();
         th_load_nvs();
@@ -312,6 +355,14 @@ void modulus_wireless_802154_poll(void)
     modulus_zb_auto_poll(); /* also driven by always-on zb_auto task */
 
     const TickType_t now = xTaskGetTickCount();
+    /* Keep the P4 registry synchronized after either side boots. A stale local
+     * row can otherwise suppress the empty-list retry even though the Nano has
+     * newer addressing/capability data for the same IEEE device. */
+    if (modulus_wireless_zb_joined() &&
+        now - last_empty_refresh >= pdMS_TO_TICKS(5000)) {
+        last_empty_refresh = now;
+        (void)modulus_wireless_zb_get_devices();
+    }
     if (s_zb_scan_active && now >= s_zb_scan_deadline) {
         zb_scan_finish();
     }
@@ -370,14 +421,57 @@ void modulus_wireless_zb_note_device_joined(uint16_t short_addr, const uint8_t i
 void modulus_wireless_zb_note_device_caps(uint16_t short_addr, uint8_t endpoint,
                                                  uint8_t caps, uint16_t device_id)
 {
-    (void)device_id;
+    static uint16_t modulus_node_short;
     bool save = false;
     taskENTER_CRITICAL(&s_mux);
+    const uint8_t ep = endpoint ? endpoint : 1;
+    int found = -1;
+    int base = -1;
     for (int i = 0; i < s_zb_dev_n; i++) {
-        if (s_zb_devs[i].short_addr != short_addr || short_addr == 0) {
-            continue;
+        if (s_zb_devs[i].short_addr != short_addr || short_addr == 0) continue;
+        if (base < 0) base = i;
+        if (s_zb_devs[i].endpoint == ep) { found = i; break; }
+    }
+
+    /* A Modulus node exposes one configuration endpoint, one endpoint per
+     * channel and Zigbee's reserved Green Power endpoint 242.  They all have
+     * the same IEEE address and are one physical device.  Keep one registry
+     * row so the M panel does not turn every channel into a separate device. */
+    if (device_id == 0xFFF0 && base >= 0) {
+        modulus_node_short = short_addr;
+        found = base;
+        for (int i = s_zb_dev_n - 1; i >= 0; --i) {
+            if (i == base || s_zb_devs[i].short_addr != short_addr) continue;
+            for (int j = i; j + 1 < s_zb_dev_n; ++j) s_zb_devs[j] = s_zb_devs[j + 1];
+            --s_zb_dev_n;
+            if (i < base) --base;
         }
-        s_zb_devs[i].endpoint = endpoint ? endpoint : 1;
+        found = base;
+        s_zb_devs[found].endpoint = 1;
+        save = true;
+    } else if (modulus_node_short == short_addr && base >= 0) {
+        found = base;
+        if (ep != 242) {
+            s_zb_devs[found].caps |= caps;
+            if (s_zb_devs[found].endpoint == 1 && caps != 0) s_zb_devs[found].endpoint = ep;
+            save = true;
+        }
+        taskEXIT_CRITICAL(&s_mux);
+        if (save) zb_save_nvs();
+        return;
+    }
+    if (found < 0 && base >= 0 && s_zb_devs[base].endpoint == 1 &&
+        s_zb_devs[base].caps == 0) {
+        found = base;
+    } else if (found < 0 && base >= 0 && s_zb_dev_n < MODULUS_ZB_MAX_DEVICES) {
+        found = s_zb_dev_n++;
+        s_zb_devs[found] = s_zb_devs[base];
+        snprintf(s_zb_devs[found].name, sizeof(s_zb_devs[found].name),
+                 "Endpoint %u", (unsigned)ep);
+    }
+    if (found >= 0) {
+        int i = found;
+        s_zb_devs[i].endpoint = ep;
         s_zb_devs[i].caps = caps;
         if (strncmp(s_zb_devs[i].name, "Dev ", 4) == 0) {
             const char *kind = (caps & ZIGBEE_CAP_LEVEL)      ? "Light"
@@ -392,7 +486,6 @@ void modulus_wireless_zb_note_device_caps(uint16_t short_addr, uint8_t endpoint,
             snprintf(s_zb_devs[i].name, sizeof(s_zb_devs[i].name), "%s %.6s", kind, id_copy);
         }
         save = true;
-        break;
     }
     taskEXIT_CRITICAL(&s_mux);
     if (save) {
@@ -628,6 +721,10 @@ bool modulus_wireless_zigbee_scan_start(void)
         s_zb_scan_done = true;
         return false;
     }
+    /* Also enumerate the Nano's persistent neighbor table. Already-paired
+     * devices do not emit another DEVICE_ANNCE merely because permit-join was
+     * opened, so waiting for join events alone produces an empty scan. */
+    (void)modulus_wireless_zb_get_devices();
     return true;
 }
 

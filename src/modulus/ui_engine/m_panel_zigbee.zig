@@ -46,6 +46,7 @@ pub const CardLayout = struct {
     exposes_link: geom.Rect = .{},
     identify: geom.Rect = .{},
     remove: geom.Rect = .{},
+    configure: geom.Rect = .{},
 };
 
 pub const Hit = struct {
@@ -71,6 +72,19 @@ pub const Kind = enum {
     cover,
     identify,
     remove,
+    configure,
+    node_name,
+    node_type,
+    node_gpio,
+    node_polarity,
+    node_pullup,
+    node_poll,
+    node_led_gpio,
+    node_led_polarity,
+    node_apply,
+    node_close,
+    node_prev,
+    node_next,
     exposes,
 };
 
@@ -85,6 +99,19 @@ pub const Layout = struct {
     scroll_max: i32 = 0,
     grid_cols: u8 = 2,
     menu_anchor: geom.Rect = .{},
+    node_name: geom.Rect = .{},
+    node_led_gpio: geom.Rect = .{},
+    node_led_polarity: geom.Rect = .{},
+    node_type: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_gpio: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_poll: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_pullup: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_polarity: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_apply: geom.Rect = .{},
+    node_close: geom.Rect = .{},
+    node_prev: geom.Rect = .{},
+    node_next: geom.Rect = .{},
+    node_page_start: u8 = 0,
 };
 
 fn gridCols(view_w: i32) i32 {
@@ -360,10 +387,13 @@ fn paintDevCard(
         font.drawTextRole(logical, bx + icons_phosphor.size + tokens.Space.xs, foot_mid - @divTrunc(foot_lh, 2), bat, theme.on_surface_variant, .label_m);
     }
 
+    const cfg_w = btnWidth("Configure");
     const id_w = btnWidth("Identify");
     const del_w = btnWidth("Del");
     lay.remove = .{ .x = outer.x + outer.w - pad - del_w, .y = foot_y, .w = del_w, .h = row_h };
     lay.identify = .{ .x = lay.remove.x - tokens.Space.sm - id_w, .y = foot_y, .w = id_w, .h = row_h };
+    lay.configure = .{ .x = lay.identify.x - tokens.Space.sm - cfg_w, .y = foot_y, .w = cfg_w, .h = row_h };
+    widgets.drawFilledButton(logical, lay.configure, "Configure", theme);
     widgets.drawTonalButton(logical, lay.identify, "Identify", theme);
     widgets.drawDangerTonalButton(logical, lay.remove, "Del", theme);
 }
@@ -432,14 +462,128 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
         expr.drawLoadingIndicator(logical, prog, ctx.anim_t * 8.0, theme);
     }
 
-    const footer_h = btn_size.height() + tokens.Space.md;
-    const body_top = bar_y + btn_size.height() + tokens.Space.md + if (permit_on) tokens.Space.sm + tokens.Space.xs else 0;
+    const footer_h = if (w.zb_node_open) 0 else btn_size.height() + tokens.Space.md;
+    const body_top = if (w.zb_node_open)
+        lay.header.back.y + lay.header.back.h + tokens.Space.sm
+    else
+        bar_y + btn_size.height() + tokens.Space.md + if (permit_on) tokens.Space.sm + tokens.Space.xs else 0;
     lay.view = .{
         .x = shell.x + pad,
         .y = body_top,
         .w = shell.w - pad * 2,
         .h = shell.y + shell.h - pad - footer_h - body_top,
     };
+    if (w.zb_node_open) {
+        // Configuration owns the whole body. Cover the network toolbar drawn
+        // during the transition so all four fixed channels fit without a
+        // laggy scrolling surface.
+        logical.fillRect(lay.view, theme.elev(3));
+        const node_row: i32 = 52;
+        const node_gap = tokens.Space.sm;
+        lay.scroll_max = 0;
+        const node_scroll: i32 = 0;
+        logical.setClip(lay.view);
+        var y = lay.view.y - node_scroll;
+        const full_w = lay.view.w;
+        if (!w.zb_node_ready) {
+            font.drawTextRole(logical, lay.view.x, y, "Reading Node configuration...", theme.on_surface_variant, .title_m);
+        } else {
+            const row = node_row;
+            const count: usize = @min(@as(usize, w.zb_node_channel_count), w.zb_node_channels.len);
+            const pages: usize = count + 1;
+            const page: usize = @min(@as(usize, w.zb_node_page), pages - 1);
+            const first: usize = page -| 1;
+            const last: usize = @min(first + 1, count);
+            lay.node_page_start = @intCast(first);
+            font.drawTextRole(logical, lay.view.x, y, "Modulus Zigbee Node", theme.on_surface, .title_l);
+            y += 52;
+            var page_buf: [40]u8 = undefined;
+            const page_text = if (page == 0) "STATUS LED SETTINGS" else std.fmt.bufPrint(&page_buf, "CHANNEL {d} SETTINGS", .{first + 1}) catch "CHANNEL SETTINGS";
+            const section: geom.Rect = .{ .x = lay.view.x, .y = y, .w = full_w, .h = 58 };
+            widgets.fillRoundRect(logical, section, tokens.Shape.md, theme.primary_container);
+            const page_w = font.textWidthStr(page_text, .title_m);
+            const page_h = font.faceHeight(font.faceForRole(.title_m));
+            font.drawTextRole(logical, section.x + @divTrunc(section.w - page_w, 2), section.y + @divTrunc(section.h - page_h, 2), page_text, theme.on_primary_container, .title_m);
+            y += section.h + node_gap;
+            lay.node_name = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
+            paintDropdownRow(logical, theme, lay.node_name, "Device name", std.mem.sliceTo(&w.zb_node_name, 0)); y += row + node_gap;
+            const types = [_][]const u8{ "Disabled", "Switch", "Digital output", "Digital input", "DS18B20" };
+            if (page == 0) {
+                var led_gpio: [12]u8 = undefined;
+                lay.node_led_gpio = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
+                const led_text = if (w.zb_node_led_gpio < 0) "None" else std.fmt.bufPrint(&led_gpio, "GPIO {d}", .{w.zb_node_led_gpio}) catch "?";
+                paintDropdownRow(logical, theme, lay.node_led_gpio, "Status LED pin", led_text); y += row + node_gap;
+                lay.node_led_polarity = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
+                paintToggleRow(logical, theme, lay.node_led_polarity, "LED active low", (w.zb_node_led_flags & 1) != 0); y += row + node_gap;
+            } else {
+              var i: usize = 0;
+              while (i < last - first) : (i += 1) {
+                const channel_idx = first + i;
+                var gpio: [12]u8 = undefined;
+                lay.node_type[i] = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
+                const ch = &w.zb_node_channels[channel_idx];
+                paintDropdownRow(logical, theme, lay.node_type[i], "Function", types[@min(@as(usize, ch.typ), types.len - 1)]);
+                y += row + node_gap;
+                lay.node_gpio[i] = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
+                const gpio_text = if (ch.gpio < 0) "None" else std.fmt.bufPrint(&gpio, "GPIO {d}", .{ch.gpio}) catch "?";
+                paintDropdownRow(logical, theme, lay.node_gpio[i], "Pin", gpio_text);
+                y += row + node_gap;
+                if (ch.typ == 4) {
+                    var period: [24]u8 = undefined;
+                    lay.node_poll[i] = .{ .x=lay.view.x, .y=y, .w=full_w, .h=row };
+                    paintDropdownRow(logical, theme, lay.node_poll[i], "Poll interval", std.fmt.bufPrint(&period, "{d} s", .{ch.poll_interval_s}) catch "?");
+                    y += row + node_gap;
+                    var reading: [32]u8 = undefined;
+                    const value = if (ch.gpio < 0) "Select a GPIO" else switch (ch.temperature_state) {
+                        1 => std.fmt.bufPrint(&reading, "{d:.2} C", .{@as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0}) catch "?",
+                        2 => "Sensor missing / error",
+                        3 => "No recent reading",
+                        4 => "Apply and restart required",
+                        else => "Waiting for reading",
+                    };
+                    paintReadonly(logical, theme, .{ .x=lay.view.x, .y=y, .w=full_w, .h=row }, "Temperature", value, theme.on_surface_variant);
+                    y += row + node_gap;
+                } else if (ch.typ == 3) {
+                    const half = @divTrunc(full_w - node_gap, 2);
+                    lay.node_polarity[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                    paintToggleRow(logical, theme, lay.node_polarity[i], "Active low", (ch.flags & 1) != 0);
+                    lay.node_pullup[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                    paintToggleRow(logical, theme, lay.node_pullup[i], "Internal pull-up", (ch.flags & 2) != 0);
+                    y += row + node_gap;
+                    const state = if (ch.gpio < 0) "Select a GPIO" else switch (ch.digital_state) {
+                        1 => if (ch.digital_value) "ON" else "OFF",
+                        2 => "No recent state",
+                        3 => "Apply and restart required",
+                        else => "Waiting for state",
+                    };
+                    paintReadonly(logical, theme, .{ .x=lay.view.x, .y=y, .w=full_w, .h=row }, "Input", state, theme.on_surface_variant);
+                    y += row + node_gap;
+                } else if (ch.typ == 1 or ch.typ == 2) {
+                lay.node_polarity[i] = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
+                paintToggleRow(logical, theme, lay.node_polarity[i], "Active low", (ch.flags & 1) != 0);
+                y += row + node_gap;
+                }
+              }
+            }
+            lay.node_apply = .{ .x = lay.view.x, .y = y + tokens.Space.sm, .w = 300, .h = btn_size.height() };
+            lay.node_close = .{ .x = lay.node_apply.x + lay.node_apply.w + tokens.Space.sm, .y = lay.node_apply.y, .w = 160, .h = btn_size.height() };
+            if (count > 1) {
+                lay.node_next = .{ .x = lay.view.x + full_w - 140, .y = lay.node_apply.y, .w = 140, .h = btn_size.height() };
+                lay.node_prev = .{ .x = lay.node_next.x - 140 - tokens.Space.sm, .y = lay.node_apply.y, .w = 140, .h = btn_size.height() };
+            }
+            widgets.drawFilledButton(logical, lay.node_apply, "Apply and restart", theme);
+            widgets.drawTonalButton(logical, lay.node_close, "Close", theme);
+            if (count > 1) {
+                if (page > 0) widgets.drawTonalButton(logical, lay.node_prev, "Previous", theme)
+                else widgets.drawButton(logical, lay.node_prev, "Previous", .tonal, .disabled, theme);
+                if (page + 1 < pages) widgets.drawFilledButton(logical, lay.node_next, "Next", theme)
+                else if (count < w.zb_node_channels.len) widgets.drawFilledButton(logical, lay.node_next, "Add channel", theme)
+                else widgets.drawButton(logical, lay.node_next, "Next", .filled, .disabled, theme);
+            }
+        }
+        logical.setClip(null);
+        return lay;
+    }
     lay.card_n = devCount(w);
     const cols = gridCols(lay.view.w);
     lay.grid_cols = @intCast(cols);
@@ -452,14 +596,17 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
 
     if (!w.zigbee) {
         font.drawTextRole(logical, lay.view.x, lay.view.y, "Enable Zigbee radio in Settings > Wireless.", theme.on_surface_variant, .body_m);
+        logical.setClip(null);
         return lay;
     }
     if (!w.zb_joined) {
         font.drawTextRole(logical, lay.view.x, lay.view.y, "Join the Zigbee hub, then Permit join to pair devices.", theme.on_surface_variant, .body_m);
+        logical.setClip(null);
         return lay;
     }
     if (lay.card_n == 0) {
         font.drawTextRole(logical, lay.view.x, lay.view.y, "No devices - tap Permit join and pair a device.", theme.on_surface_variant, .body_m);
+        logical.setClip(null);
         return lay;
     }
 
@@ -525,6 +672,7 @@ fn cardHitAt(c: CardLayout, dev: u8, x: i32, y: i32) Hit {
     if (c.exposes_link.contains(x, y)) return .{ .kind = .exposes, .dev = dev };
     if (c.identify.contains(x, y)) return .{ .kind = .identify, .dev = dev };
     if (c.remove.contains(x, y)) return .{ .kind = .remove, .dev = dev };
+    if (c.configure.contains(x, y)) return .{ .kind = .configure, .dev = dev };
     var si: u8 = 0;
     while (si < c.slot_n) : (si += 1) {
         const slot = c.slots[si];
@@ -603,6 +751,21 @@ pub fn hit(layout: Layout, x: i32, y: i32) Hit {
     if (layout.permit.contains(x, y)) return .{ .kind = .permit_join };
     if (layout.refresh.contains(x, y)) return .{ .kind = .refresh };
     if (!layout.join.isEmpty() and layout.join.contains(x, y)) return .{ .kind = .join_hub };
+    if (layout.node_name.contains(x, y)) return .{ .kind = .node_name };
+    if (layout.node_led_gpio.contains(x, y)) return .{ .kind = .node_led_gpio };
+    if (layout.node_led_polarity.contains(x, y)) return .{ .kind = .node_led_polarity };
+    if (layout.node_apply.contains(x, y)) return .{ .kind = .node_apply };
+    if (layout.node_close.contains(x, y)) return .{ .kind = .node_close };
+    if (layout.node_prev.contains(x, y)) return .{ .kind = .node_prev };
+    if (layout.node_next.contains(x, y)) return .{ .kind = .node_next };
+    for (0..4) |i| {
+        const channel: u8 = layout.node_page_start + @as(u8, @intCast(i));
+        if (layout.node_type[i].contains(x, y)) return .{ .kind = .node_type, .dev = channel };
+        if (layout.node_gpio[i].contains(x, y)) return .{ .kind = .node_gpio, .dev = channel };
+        if (layout.node_poll[i].contains(x, y)) return .{ .kind = .node_poll, .dev = channel };
+        if (layout.node_pullup[i].contains(x, y)) return .{ .kind = .node_pullup, .dev = channel };
+        if (layout.node_polarity[i].contains(x, y)) return .{ .kind = .node_polarity, .dev = channel };
+    }
     var i: u8 = 0;
     while (i < layout.card_n) : (i += 1) {
         const h = cardHitAt(layout.cards[i], i, x, y);
@@ -629,4 +792,27 @@ test "zigbee panel chrome meets touch_min" {
         try std.testing.expect(lay.cards[0].remove.h >= tokens.Logical.touch_min);
         try std.testing.expect(lay.cards[0].exposes_link.h >= tokens.Logical.touch_min);
     }
+}
+
+
+test "DS18B20 page fits and poll hit selects the correct channel" {
+    var logical = try fb.LogicalFb.alloc(std.testing.allocator);
+    defer logical.deinit(std.testing.allocator);
+    var w: settings_prefs.WirelessPrefs = .{};
+    w.zb_node_open = true;
+    w.zb_node_ready = true;
+    w.zb_node_channel_count = 12;
+    w.zb_node_page = 12;
+    w.zb_node_channels[11].typ = 4;
+    w.zb_node_channels[11].gpio = 22;
+    w.zb_node_channels[11].temperature_state = 1;
+    w.zb_node_channels[11].temperature_centi_c = -125;
+    const layout = paint(&logical, tokens.Theme.industrialTealDark(), .{.wireless=&w}, 1.0);
+    try std.testing.expect(layout.node_apply.y+layout.node_apply.h <= layout.view.y+layout.view.h);
+    const r=layout.node_poll[0];
+    try std.testing.expect(r.h >= 48);
+    const selected=hit(layout,r.x+10,r.y+10);
+    try std.testing.expectEqual(Kind.node_poll,selected.kind);
+    try std.testing.expectEqual(@as(u8,11),selected.dev);
+    try std.testing.expect(layout.node_polarity[0].isEmpty());
 }

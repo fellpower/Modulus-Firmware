@@ -29,6 +29,11 @@
 #define ZIGBEE_CMD_COLOR           0x20 /* [short:2BE][ep][mode][a:2BE][b:2BE]
                                          * mode 0: a=color temp (mireds), b=trans ds
                                          * mode 1: a=hue 0-254, b=saturation 0-254 */
+#define ZIGBEE_CMD_NODE_CONFIG     0x21 /* [short:2BE][node_cmd][payload...] */
+#define ZIGBEE_CMD_OTA_BEGIN       0x30 /* [image_size:4BE] */
+#define ZIGBEE_CMD_OTA_DATA        0x31 /* [offset:4BE][crc32:4BE][data...] */
+#define ZIGBEE_CMD_OTA_END         0x32 /* validate and select the new slot */
+#define ZIGBEE_CMD_OTA_REBOOT      0x33 /* accepted only after successful END */
 
 /* Events to host (P4) */
 #define ZIGBEE_EVT_OK              0x81
@@ -49,6 +54,7 @@
 #define ZIGBEE_EVT_ACK             0x94 /* [seq:1] cmd accepted */
 #define ZIGBEE_EVT_NAK             0x95 /* [seq:1][reason:1] cmd rejected */
 #define ZIGBEE_EVT_DEV_INFO        0x96 /* [short:2BE][mfr\0model\0] (Basic 0x0004/0x0005) */
+#define ZIGBEE_EVT_NODE_CONFIG     0x97 /* [short:2BE][node_rsp][payload...] */
 
 /*
  * Host→hub wire format (sequenced):
@@ -66,3 +72,6 @@
 #define ZIGBEE_CAP_POWER           0x20
 #define ZIGBEE_CAP_METER           0x40
 #define ZIGBEE_CAP_COLOR           0x80 /* Color Control (0x0300) */
+
+#define ZIGBEE_EVT_TEMPERATURE 0x98 /* [short:2BE][endpoint][centiC:s16BE], 0x8000 invalid */
+#define ZIGBEE_EVT_DIGITAL_INPUT 0x99 /* [short:2BE][endpoint][logical state] */

@@ -62,6 +62,10 @@ pub const Target = enum {
     wl_pass,
     wl_en_mac,
     wl_zb_code,
+    wl_zb_name,
+    wl_zb_node_name,
+    wl_zb_node_gpio,
+    wl_zb_node_poll,
     wl_th_node,
     wl_bt_passkey,
     cnc_masso_ip,
@@ -104,6 +108,8 @@ pub const State = struct {
     caps: bool = false,
     /// LVGL `1#` page — digits/symbols instead of QWERTY.
     digits_page: bool = false,
+    /// First key on a seeded number field replaces the displayed value.
+    input_fresh: bool = false,
 
     /// MD3 date/time picker civil values (24h).
     year: u16 = 2026,
@@ -138,6 +144,7 @@ pub const State = struct {
         self.shift_on = false;
         self.caps = false;
         self.digits_page = false;
+        self.input_fresh = mode == .number;
         const n = @min(seed.len, self.buf.len);
         @memcpy(self.buf[0..n], seed[0..n]);
         self.len = n;
@@ -183,12 +190,23 @@ pub const State = struct {
     }
 
     pub fn pushChar(self: *State, ch: u8) void {
+        if (self.input_fresh) {
+            @memset(&self.buf, 0);
+            self.len = 0;
+            self.input_fresh = false;
+        }
         if (self.len >= self.buf.len) return;
         self.buf[self.len] = ch;
         self.len += 1;
     }
 
     pub fn backspace(self: *State) void {
+        if (self.input_fresh) {
+            @memset(&self.buf, 0);
+            self.len = 0;
+            self.input_fresh = false;
+            return;
+        }
         if (self.len == 0) return;
         self.len -= 1;
         self.buf[self.len] = 0;
@@ -378,6 +396,11 @@ pub fn allowsDot(t: Target) bool {
 /// carry their own length rules.
 pub fn numberValid(t: Target, txt: []const u8) bool {
     if (isPinTarget(t)) return true;
+    if (t == .wl_zb_node_gpio and txt.len == 0) return true;
+    if (t == .wl_zb_node_poll) {
+        const seconds=std.fmt.parseInt(u16,txt,10) catch return false;
+        return seconds>=15 and seconds<=3600;
+    }
     if (txt.len == 0) return false;
     switch (numberKind(t)) {
         .integer => _ = std.fmt.parseInt(u32, txt, 10) catch return false,
@@ -633,7 +656,7 @@ fn paintPinGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid) void {
         var lab: [1]u8 = .{digits[i]};
         paintKey(logical, cell(g, @intCast(i % 3), @intCast(i / 3)), lab[0..], theme.surface_container, theme.on_surface);
     }
-    paintKey(logical, cell(g, 0, 3), "Bk", theme.secondary_container, theme.on_secondary_container);
+    paintKey(logical, cell(g, 0, 3), "DEL", theme.secondary_container, theme.on_secondary_container);
     paintKey(logical, cell(g, 1, 3), "0", theme.surface_container, theme.on_surface);
     paintKey(logical, cell(g, 2, 3), "OK", theme.primary, theme.on_primary);
 }
@@ -645,7 +668,7 @@ fn paintNumGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid, dot: bool)
         var lab: [1]u8 = .{digits[i]};
         paintKey(logical, cell(g, @intCast(i % 3), @intCast(i / 3)), lab[0..], theme.surface_container, theme.on_surface);
     }
-    paintKey(logical, cell(g, 3, 0), "Bk", theme.secondary_container, theme.on_secondary_container);
+    paintKey(logical, cell(g, 3, 0), "DEL", theme.secondary_container, theme.on_secondary_container);
     if (dot) paintKey(logical, cell(g, 3, 2), ".", theme.surface_container, theme.on_surface);
     paintKey(logical, cell(g, 3, 3), "X", theme.error_container, theme.on_error_container);
     const ok: geom.Rect = .{
@@ -946,7 +969,7 @@ test "number pad parses" {
     st.openPad(.number, .disp_bright, "Brightness", "42");
     try std.testing.expectEqual(@as(u32, 42), st.parseU32().?);
     st.pushChar('0');
-    try std.testing.expectEqual(@as(u32, 420), st.parseU32().?);
+    try std.testing.expectEqual(@as(u32, 0), st.parseU32().?);
 }
 
 test "pin mask and dock" {
@@ -1037,4 +1060,12 @@ test "date mode seeds YYYY-MM-DD" {
     try std.testing.expectEqual(@as(u8, 12), st.month);
     try std.testing.expectEqual(@as(u8, 5), st.day);
     try std.testing.expect(panelRect(&st).w == 500);
+}
+
+
+test "node poll interval accepts bounded integer seconds" {
+    try std.testing.expect(numberValid(.wl_zb_node_poll,"15"));
+    try std.testing.expect(numberValid(.wl_zb_node_poll,"3600"));
+    for ([_][]const u8{"", "0", "14", "3601", "15.5", "-15"}) |value|
+        try std.testing.expect(!numberValid(.wl_zb_node_poll,value));
 }

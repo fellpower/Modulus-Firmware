@@ -770,6 +770,18 @@ pub const ZbDevSnap = struct {
 };
 
 pub const WirelessPrefs = struct {
+    pub const ZbNodeChannel = struct {
+        typ: u8 = 0,
+        gpio: i8 = -1,
+        flags: u8 = 0,
+        name: [24]u8 = .{0} ** 24,
+        valid: bool = false,
+        poll_interval_s: u16 = 15,
+        temperature_centi_c: i16 = 0,
+        temperature_state: u8 = 0,
+        digital_value: bool = false,
+        digital_state: u8 = 0,
+    };
     /// 0=hub 1=wifi 2=bt 3=espnow 4=zigbee 5=thread 6=wifi_saved 7=wifi_adv
     page: u8 = 0,
     wifi: bool = false,
@@ -867,6 +879,17 @@ pub const WirelessPrefs = struct {
     /// Device: live NanoH2 status / network lines from wireless shim.
     zb_status: [48]u8 = .{0} ** 48,
     zb_network: [40]u8 = .{0} ** 40,
+    zb_node_open: bool = false,
+    zb_node_ready: bool = false,
+    zb_node_idx: u8 = 0,
+    zb_node_page: u8 = 0,
+    zb_node_short: u16 = 0,
+    zb_node_name: [32]u8 = .{0} ** 32,
+    zb_node_led_gpio: i8 = 15,
+    zb_node_led_flags: u8 = 1,
+    zb_node_generation: u32 = 0,
+    zb_node_channel_count: u8 = 0,
+    zb_node_channels: [12]ZbNodeChannel = [_]ZbNodeChannel{.{}} ** 12,
     /// Device: live Wi-Fi / BLE status from C6 shim.
     wifi_status: [48]u8 = .{0} ** 48,
     bt_status: [48]u8 = .{0} ** 48,

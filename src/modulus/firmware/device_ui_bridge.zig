@@ -238,6 +238,45 @@ fn syncZbDevices(w: *settings_prefs.WirelessPrefs) void {
     w.zb_dev_n = w.live_zb_n;
 }
 
+fn syncZbNode(eng: *Engine) void {
+    var w = &eng.prefs.wireless;
+    if (!w.zb_node_open) return;
+    var info: c.modulus_zb_node_info_t = undefined;
+    if (!c.modulus_wireless_zb_node_get_info(&info)) return;
+    const became_ready = !w.zb_node_ready;
+    var changed = info.generation != w.zb_node_generation;
+    w.zb_node_generation = info.generation;
+    w.zb_node_ready = true;
+    w.zb_node_short = info.short_addr;
+    w.zb_node_channel_count = @min(info.channel_count, 12);
+    w.zb_node_led_gpio = info.status_led_gpio;
+    w.zb_node_led_flags = info.status_led_flags;
+    copySliceTo(&w.zb_node_name, std.mem.sliceTo(&info.name, 0));
+    if (changed and info.last_status != 0) {
+        if (info.last_status == 3) eng.showSnackbarError("Pin conflict or reserved GPIO")
+        else eng.showSnackbarError("Node rejected setting");
+    }
+    var i: u8 = 0;
+    while (i < w.zb_node_channel_count) : (i += 1) {
+        var channel: c.modulus_zb_node_channel_t = undefined;
+        if (!c.modulus_wireless_zb_node_get_channel(i, &channel)) continue;
+        var dst = &w.zb_node_channels[i];
+        if (dst.temperature_centi_c != channel.temperature_centi_c or dst.temperature_state != channel.temperature_state or
+            dst.digital_value != channel.digital_value or dst.digital_state != channel.digital_state) changed = true;
+        dst.poll_interval_s = channel.poll_interval_s;
+        dst.temperature_centi_c = channel.temperature_centi_c;
+        dst.temperature_state = channel.temperature_state;
+        dst.digital_value = channel.digital_value;
+        dst.digital_state = channel.digital_state;
+        dst.typ = channel.type;
+        dst.gpio = channel.gpio;
+        dst.flags = channel.flags;
+        dst.valid = channel.valid;
+        copySliceTo(&dst.name, std.mem.sliceTo(&channel.name, 0));
+    }
+    if (became_ready or changed) eng.requestSettingsRepaint();
+}
+
 fn syncThDevices(w: *settings_prefs.WirelessPrefs) void {
     const n = c.modulus_wireless_thread_device_count();
     w.live_th_n = 0;
@@ -302,7 +341,7 @@ pub fn wirelessPoll(eng: *Engine) void {
 
     if (was_bt_on and !w.bt and c.modulus_wireless_ble_enable_failed()) {
         if (!(c.modulus_c6_sdio_ready() and c.modulus_wireless_transport_up())) {
-            eng.showSnackbarError("Bluetooth failed — C6 offline (dual-flash C6 UART COM18)");
+            eng.showSnackbarError("Bluetooth failed — Internal C6 offline");
         } else {
             eng.showSnackbarError("Bluetooth failed — retry or reboot Tab5");
         }
@@ -368,6 +407,7 @@ pub fn wirelessPoll(eng: *Engine) void {
     }
     copyCStr(w.zb_network[0..], c.modulus_wireless_zigbee_network_text());
     syncZbDevices(w);
+    syncZbNode(eng);
     syncThDevices(w);
 
     if (w.scan_phase == 1 and c.modulus_wireless_wifi_scan_done()) {
@@ -387,7 +427,7 @@ pub fn wirelessPoll(eng: *Engine) void {
         w.wifi_scan_hw = false;
         w.scan_c6_down = w.scan_n == 0 and !(c.modulus_c6_sdio_ready() and c.modulus_wireless_transport_up());
         if (w.scan_c6_down) {
-            eng.showSnackbarError("C6 offline — dual-flash C6 UART (COM18)");
+            eng.showSnackbarError("Internal C6 offline");
         }
         eng.requestSettingsRepaint();
     }
@@ -415,7 +455,7 @@ pub fn wirelessPoll(eng: *Engine) void {
         w.bt_scan_hw = false;
         if (w.bt_scan_n == 0) {
             if (!(c.modulus_c6_sdio_ready() and c.modulus_wireless_transport_up())) {
-                eng.showSnackbarError("No BLE devices — C6 offline (dual-flash COM18)");
+                eng.showSnackbarError("No BLE devices — Internal C6 offline");
             } else if (!c.modulus_wireless_ble_is_enabled()) {
                 eng.showSnackbarError("No BLE devices — radio off");
             }
@@ -514,7 +554,7 @@ fn wirelessScanStart(eng: *Engine) void {
                 w.scan_n = 0;
                 w.scan_c6_down = !(c.modulus_c6_sdio_ready() and c.modulus_wireless_transport_up());
                 eng.showSnackbarError(if (w.scan_c6_down)
-                    "C6 offline — dual-flash C6 UART (COM18)"
+                    "Internal C6 offline"
                 else
                     "Wi-Fi scan failed");
             }
@@ -533,7 +573,7 @@ fn wirelessScanStart(eng: *Engine) void {
                 w.bt_scan_n = 0;
                 const c6_down = !(c.modulus_c6_sdio_ready() and c.modulus_wireless_transport_up());
                 eng.showSnackbarError(if (c6_down)
-                    "BLE scan failed — C6 offline (dual-flash COM18)"
+                    "BLE scan failed — Internal C6 offline"
                 else
                     "BLE scan failed — enable radio / wait for Ready");
             }
@@ -599,7 +639,7 @@ pub fn wirelessCmd(eng: *Engine, cmd: ui_engine.engine.WirelessUiCmd) void {
             copySliceTo(eng.prefs.wireless.ssid[0..], ssid);
             if (!c.modulus_wireless_wifi_connect(ssid.ptr, pass.ptr)) {
                 eng.prefs.wireless.wifi_connecting = false;
-                eng.showSnackbarError("Wi-Fi connect failed — C6 / SDIO");
+                eng.showSnackbarError("Wi-Fi connect failed — Internal C6");
             } else {
                 eng.prefs.wireless.wifi_connecting = true;
             }
@@ -694,6 +734,35 @@ pub fn wirelessCmd(eng: *Engine, cmd: ui_engine.engine.WirelessUiCmd) void {
         },
         .zb_toggle => |idx| _ = c.modulus_wireless_zigbee_device_toggle(@intCast(idx)),
         .zb_identify => |idx| _ = c.modulus_wireless_zigbee_device_identify(@intCast(idx)),
+        .zb_rename => |p| {
+            var name_buf: [32]u8 = undefined;
+            _ = c.modulus_wireless_zigbee_device_rename(@intCast(p.idx), zTerm(&name_buf, p.name).ptr);
+            syncZbDevices(&eng.prefs.wireless);
+        },
+        .zb_node_open => |idx| {
+            var dev: c.modulus_zb_device_t = undefined;
+            if (c.modulus_wireless_zigbee_device_get(@intCast(idx), &dev)) {
+                eng.prefs.wireless.zb_node_short = dev.short_addr;
+                eng.prefs.wireless.zb_node_ready = false;
+                if (!c.modulus_wireless_zb_node_request(dev.short_addr)) eng.showSnackbarError("Node did not respond");
+            }
+        },
+        .zb_node_name => |name| {
+            var buf: [32]u8 = undefined;
+            _ = c.modulus_wireless_zb_node_set_name(eng.prefs.wireless.zb_node_short, zTerm(&buf, name).ptr);
+        },
+        .zb_node_channel => |p| {
+            var buf: [24]u8 = undefined;
+            _ = c.modulus_wireless_zb_node_set_channel(eng.prefs.wireless.zb_node_short,
+                p.index, p.typ, p.gpio, p.flags, zTerm(&buf, p.name).ptr);
+        },
+        .zb_node_poll => |p| {
+            if (!c.modulus_wireless_zb_node_set_poll(eng.prefs.wireless.zb_node_short, p.index, p.seconds))
+                eng.showSnackbarError("Could not save interval: check Node firmware/link");
+        },
+        .zb_node_status_led => |p| _ = c.modulus_wireless_zb_node_set_status_led(
+            eng.prefs.wireless.zb_node_short, p.gpio, p.flags),
+        .zb_node_apply => _ = c.modulus_wireless_zb_node_apply(eng.prefs.wireless.zb_node_short),
         .zb_remove => |idx| {
             _ = c.modulus_wireless_zigbee_device_leave(@intCast(idx));
             syncZbDevices(&eng.prefs.wireless);
@@ -734,6 +803,8 @@ pub fn wirelessCmd(eng: *Engine, cmd: ui_engine.engine.WirelessUiCmd) void {
             if (p.idx < eng.prefs.wireless.live_zb_n) eng.prefs.wireless.live_zb_snap[p.idx].child_lock = p.on;
         },
         .zb_refresh => {
+            _ = c.modulus_wireless_zb_get_state();
+            _ = c.modulus_wireless_zb_get_devices();
             syncZbDevices(&eng.prefs.wireless);
         },
         .zb_clear => {
@@ -1371,6 +1442,36 @@ fn s3OtaPoll(eng: *Engine) void {
     }
 }
 
+fn nanoOtaPoll(eng: *Engine) void {
+    var snap: c.modulus_nano_ota_snapshot_t = undefined;
+    c.modulus_nano_ota_get_snapshot(&snap);
+    var next = eng.m_panel_nano_ota_state;
+    next.phase = @enumFromInt(@min(@as(u8, @intCast(snap.phase)), @intFromEnum(ui_engine.m_panel_nano_ota.Phase.failed)));
+    next.file_count = @min(@as(u8, @intCast(snap.file_count)), ui_engine.m_panel_nano_ota.max_files);
+    next.selected = @min(@as(u8, @intCast(snap.selected)), if (next.file_count > 0) next.file_count - 1 else 0);
+    next.progress = @min(@as(u8, @intCast(snap.progress)), 100);
+    next.nano_connected = snap.nano_connected;
+    next.version_len = copyC6Text(next.version[0..], snap.nano_version);
+    next.image_version_len = copyC6Text(next.image_version[0..], snap.image_version);
+    next.status_len = copyC6Text(next.status[0..], snap.status);
+    var i: usize = 0;
+    while (i < next.file_count) : (i += 1) next.file_lens[i] = copyC6Text(next.files[i][0..], snap.files[i]);
+    if (!std.mem.eql(u8, std.mem.asBytes(&eng.m_panel_nano_ota_state), std.mem.asBytes(&next))) {
+        eng.m_panel_nano_ota_state = next;
+        if (eng.m_panel_tool == @intFromEnum(ui_engine.m_panel.ToolId.nano_update)) eng.requestFull();
+    }
+}
+
+fn nanoOtaCmd(eng: *Engine, action: ui_engine.m_panel_nano_ota.Action, index: u8) void {
+    switch (action) {
+        .refresh => c.modulus_nano_ota_refresh(),
+        .select => c.modulus_nano_ota_select(index),
+        .check => c.modulus_nano_ota_arm_selected(),
+        .flash => c.modulus_nano_ota_start(),
+    }
+    nanoOtaPoll(eng);
+}
+
 fn s3OtaCmd(eng: *Engine, action: ui_engine.m_panel_s3_ota.Action, index: u8) void {
     switch (action) {
         .refresh => c.modulus_s3_ota_refresh(),
@@ -1468,6 +1569,8 @@ pub fn install(eng: *Engine) void {
     eng.c6_ota_poll_sink = c6OtaPoll;
     eng.s3_ota_cmd_sink = s3OtaCmd;
     eng.s3_ota_poll_sink = s3OtaPoll;
+    eng.nano_ota_cmd_sink = nanoOtaCmd;
+    eng.nano_ota_poll_sink = nanoOtaPoll;
 
     // storage / i2c / wireless deferred to installLate — after boot i2c_coex.
     c.modulus_display_resume_activity_monitor();

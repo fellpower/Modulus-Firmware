@@ -68,7 +68,6 @@ def main():
     files['MANIFEST.json'] = (json.dumps(manifest, indent=2, ensure_ascii=False)+'\n').encode()
     files['FLASH-full.md'] = (args.full_images / 'FLASH-full.md').read_bytes()
     files['SHA256SUMS-full.txt'] = (args.full_images / 'SHA256SUMS-full.txt').read_bytes()
-    files['VIDEOANLEITUNG.de.md'] = (Path(__file__).resolve().parents[1] / 'VIDEOANLEITUNG.de.md').read_bytes()
     note = f'''# Single-BIN full images / Full-Images als einzelne BIN
 
 The three `*-full-{tag}.bin` files are now included **in the ZIP root**.
@@ -83,8 +82,6 @@ Pro Chip genau eine passende BIN bei `0x0` flashen; Befehle in `FLASH-full.md`.
 Einzeldateien, OTA-Apps und Lizenzen bleiben enthalten. Full-BINs niemals im
 OTA-Menü auswählen. Der C6 wird über seinen internen Programmieranschluss mit
 USB-TTL-Downloader geflasht; die normale Tab5-USB-C-Buchse flasht den P4.
-Deutsche Video-Stichpunkte: `VIDEOANLEITUNG.de.md`.
-
 **No firmware rebuild / Kein Firmware-Neubau:** This package still contains the
 original {tag} firmware. The later C6 legacy OTA fix (commit 69ca844) is NOT
 in these BINs and requires a newly built P4 image for testing.

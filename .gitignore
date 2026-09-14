@@ -1,5 +1,6 @@
 # Firmware build outputs
 firmware/**/build/
+firmware/**/build-*/
 firmware/**/build_ota*/
 firmware/**/sdkconfig
 firmware/**/sdkconfig.old
@@ -26,6 +27,15 @@ zig-pkg/
 
 # Packaged flash images (upload via GitHub Releases — do not commit binaries)
 dist/
+
+# Local recordings and exported media (never firmware source)
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.m4v
+*.wmv
 
 # Node / local tooling (not required to build/flash)
 node_modules/

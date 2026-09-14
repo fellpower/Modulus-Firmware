@@ -7,6 +7,7 @@
  *      double-blink = formed but host link silent (P4 down or unwired).
  */
 #include "nanoh2_hw.h"
+#include "nano_ota.h"
 #include "zb_uart_link.h"
 #include "zigbee_hub.h"
 
@@ -52,6 +53,7 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
     }
+    nano_ota_confirm_running();
 
     zb_uart_link_init(zigbee_hub_process_cmd);
 

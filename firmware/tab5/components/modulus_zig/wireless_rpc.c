@@ -15,6 +15,9 @@
 
 #include "esp_hosted_interface.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +29,11 @@ static bool s_zb_hub_fw; /* true once any EVT_HUB_STATE arrives */
 static uint8_t s_zb_ch;
 static uint16_t s_zb_pan;
 static uint8_t s_zb_permit_s;
+static modulus_zb_node_info_t s_node_info;
+static modulus_zb_node_channel_t s_node_channels[12];
+static portMUX_TYPE s_temperature_mux = portMUX_INITIALIZER_UNLOCKED;
+static struct { int16_t value; int64_t received_us; } s_node_temperature[12];
+static struct { bool value; int64_t received_us; } s_node_digital[12];
 
 static bool s_th_attached;
 static uint8_t s_th_role;
@@ -212,6 +220,68 @@ static void zigbee_rx(const uint8_t *payload, uint16_t len, void *ctx)
             }
         }
         break;
+    case ZIGBEE_EVT_TEMPERATURE:
+        if (args_len == 5 && (((uint16_t)args[0]<<8)|args[1]) == s_node_info.short_addr && args[2]>=10 && args[2]<22) {
+            unsigned i=args[2]-10;
+            taskENTER_CRITICAL(&s_temperature_mux);
+            s_node_temperature[i].value=(int16_t)(((uint16_t)args[3]<<8)|args[4]);
+            s_node_temperature[i].received_us=esp_timer_get_time();
+            taskEXIT_CRITICAL(&s_temperature_mux);
+        }
+        break;
+    case ZIGBEE_EVT_DIGITAL_INPUT:
+        if (args_len == 4 && (((uint16_t)args[0]<<8)|args[1]) == s_node_info.short_addr && args[2]>=10 && args[2]<22) {
+            unsigned i=args[2]-10;
+            taskENTER_CRITICAL(&s_temperature_mux);
+            s_node_digital[i].value=args[3] != 0;
+            s_node_digital[i].received_us=esp_timer_get_time();
+            taskEXIT_CRITICAL(&s_temperature_mux);
+        }
+        break;
+    case ZIGBEE_EVT_NODE_CONFIG:
+        if (args_len >= 3) {
+            const uint16_t short_addr = ((uint16_t)args[0] << 8) | args[1];
+            if (short_addr != s_node_info.short_addr) break;
+            const uint8_t response = args[2];
+            const uint8_t *p = args + 3;
+            const size_t n = args_len - 3;
+            if (response == 0x81 && n >= 4 && n >= (size_t)p[3] + (p[0] >= 2 ? 6 : 4)) {
+                memset(&s_node_info, 0, sizeof(s_node_info));
+                memset(s_node_channels, 0, sizeof(s_node_channels));
+                s_node_info.short_addr = short_addr;
+                s_node_info.protocol_version = p[0];
+                s_node_info.channel_count = p[1] > 12 ? 12 : p[1];
+                s_node_info.max_channels = p[2];
+                s_node_info.status_led_gpio = p[0] >= 2 ? (int8_t)p[4] : 15;
+                s_node_info.status_led_flags = p[0] >= 2 ? p[5] : 1;
+                const size_t name_len = p[3] < sizeof(s_node_info.name) - 1 ? p[3] : sizeof(s_node_info.name) - 1;
+                memcpy(s_node_info.name, p + (p[0] >= 2 ? 6 : 4), name_len);
+                s_node_info.generation++;
+                for (uint8_t i = 0; i < s_node_info.channel_count; i++) {
+                    uint8_t cmd[] = {ZIGBEE_CMD_NODE_CONFIG, (uint8_t)(short_addr >> 8),
+                                     (uint8_t)short_addr, 0x02, i};
+                    (void)modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
+                }
+            } else if (response == 0x82 && n >= 5 && p[0] < 12 && n >= (size_t)p[4] + 5) {
+                modulus_zb_node_channel_t *channel = &s_node_channels[p[0]];
+                memset(channel, 0, sizeof(*channel));
+                channel->poll_interval_s = (s_node_info.protocol_version >= 3 && n >= (size_t)p[4]+7) ? ((uint16_t)p[5+p[4]]<<8)|p[6+p[4]] : 15;
+                channel->apply_pending = s_node_info.protocol_version >= 3 && n >= (size_t)p[4]+8 && p[7+p[4]];
+                channel->index = p[0]; channel->type = p[1]; channel->gpio = (int8_t)p[2]; channel->flags = p[3];
+                const size_t name_len = p[4] < sizeof(channel->name) - 1 ? p[4] : sizeof(channel->name) - 1;
+                memcpy(channel->name, p + 5, name_len); channel->valid = true;
+                s_node_info.generation++;
+            } else if (response == 0x90 && n >= 2) {
+                s_node_info.last_command = p[0]; s_node_info.last_status = p[1];
+                s_node_info.generation++;
+                if ((p[0] == 0x14 || p[0] == 0x11 || p[0] == 0x15) && p[1] != 0) {
+                    uint8_t refresh[] = {ZIGBEE_CMD_NODE_CONFIG,
+                        (uint8_t)(short_addr >> 8), (uint8_t)short_addr, 0x01};
+                    (void)modulus_zb_uart_send_cmd(refresh, sizeof(refresh));
+                }
+            }
+        }
+        break;
     case ZIGBEE_EVT_FAIL:
         /* Reason map (zigbee_handler.c): 10 init-signal 11 task-create
          * 12 not-ready 13 onoff 14 level 15 raw-op-refused 16 cover
@@ -307,6 +377,116 @@ bool modulus_wireless_zb_permit_join(uint8_t seconds)
 {
     uint8_t cmd[] = {ZIGBEE_CMD_PERMIT_JOIN, seconds};
     return modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
+}
+
+bool modulus_wireless_zb_get_state(void)
+{
+    uint8_t cmd[] = {ZIGBEE_CMD_GET_STATE};
+    return modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
+}
+
+bool modulus_wireless_zb_get_devices(void)
+{
+    uint8_t cmd[] = {ZIGBEE_CMD_GET_DEVICES};
+    return modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
+}
+
+static bool node_send(uint16_t short_addr, uint8_t node_command,
+                      const uint8_t *payload, size_t payload_len)
+{
+    if (payload_len > 92) return false;
+    uint8_t cmd[4 + 92] = {ZIGBEE_CMD_NODE_CONFIG, (uint8_t)(short_addr >> 8),
+                            (uint8_t)short_addr, node_command};
+    if (payload_len) memcpy(cmd + 4, payload, payload_len);
+    return modulus_zb_uart_send_cmd(cmd, 4 + payload_len);
+}
+
+bool modulus_wireless_zb_node_request(uint16_t short_addr)
+{
+    memset(&s_node_info, 0, sizeof(s_node_info));
+    memset(s_node_channels, 0, sizeof(s_node_channels));
+    taskENTER_CRITICAL(&s_temperature_mux);
+    memset(s_node_temperature, 0, sizeof(s_node_temperature));
+    memset(s_node_digital, 0, sizeof(s_node_digital));
+    taskEXIT_CRITICAL(&s_temperature_mux);
+    s_node_info.short_addr = short_addr;
+    return node_send(short_addr, 0x01, NULL, 0);
+}
+bool modulus_wireless_zb_node_get_info(modulus_zb_node_info_t *out)
+{
+    if (!out || !s_node_info.short_addr || !s_node_info.protocol_version) return false;
+    *out = s_node_info; return true;
+}
+bool modulus_wireless_zb_node_get_channel(uint8_t index, modulus_zb_node_channel_t *out)
+{
+    if (!out || index >= 12 || !s_node_channels[index].valid) return false;
+    *out = s_node_channels[index];
+    taskENTER_CRITICAL(&s_temperature_mux);
+    out->temperature_centi_c=s_node_temperature[index].value;
+    int64_t received=s_node_temperature[index].received_us;
+    out->digital_value=s_node_digital[index].value;
+    int64_t digital_received=s_node_digital[index].received_us;
+    taskEXIT_CRITICAL(&s_temperature_mux);
+    out->temperature_state = out->apply_pending ? 4 : !received ? 0 :
+        (!modulus_wireless_zb_link_up() || esp_timer_get_time()-received > ((int64_t)out->poll_interval_s*3+15)*1000000) ? 3 :
+        out->temperature_centi_c == INT16_MIN ? 2 : 1;
+    out->digital_state = out->apply_pending ? 3 : !digital_received ? 0 :
+        (!modulus_wireless_zb_link_up() || esp_timer_get_time()-digital_received > 30000000) ? 2 : 1;
+    return true;
+}
+bool modulus_wireless_zb_node_set_name(uint16_t short_addr, const char *name)
+{
+    if (!name) return false;
+    size_t n = strnlen(name, 32);
+    if (!n || n >= 32) return false;
+    uint8_t data[32] = {(uint8_t)n};
+    memcpy(data + 1, name, n);
+    memset(s_node_info.name, 0, sizeof(s_node_info.name));
+    memcpy(s_node_info.name, name, n);
+    s_node_info.generation++;
+    return node_send(short_addr, 0x10, data, n + 1);
+}
+bool modulus_wireless_zb_node_set_channel(uint16_t short_addr, uint8_t index,
+                                         uint8_t type, int8_t gpio, uint8_t flags,
+                                         const char *name)
+{
+    if (!name || index >= 12 || type > 7) return false;
+    size_t n = strnlen(name, 24);
+    if (n >= 24) return false;
+    uint8_t data[5 + 23] = {index, type, (uint8_t)gpio, flags, (uint8_t)n};
+    memcpy(data + 5, name, n);
+    modulus_zb_node_channel_t *channel = &s_node_channels[index];
+    channel->apply_pending = true;
+    if (!channel->poll_interval_s) channel->poll_interval_s=15;
+    channel->index = index;
+    channel->type = type;
+    channel->gpio = gpio;
+    channel->flags = flags;
+    memset(channel->name, 0, sizeof(channel->name));
+    memcpy(channel->name, name, n);
+    channel->valid = true;
+    if (s_node_info.channel_count <= index) s_node_info.channel_count=index+1;
+    s_node_info.generation++;
+    return node_send(short_addr, 0x11, data, n + 5);
+}
+bool modulus_wireless_zb_node_set_poll(uint16_t short_addr, uint8_t index, uint16_t seconds)
+{
+    if (index>=12 || seconds<15 || seconds>3600 || s_node_info.protocol_version<3) return false;
+    uint8_t data[]={index,(uint8_t)(seconds>>8),(uint8_t)seconds};
+    if (!node_send(short_addr,0x15,data,sizeof(data))) return false;
+    s_node_channels[index].apply_pending=true;
+    s_node_channels[index].poll_interval_s=seconds;
+    s_node_info.generation++;
+    return true;
+}
+bool modulus_wireless_zb_node_apply(uint16_t short_addr) { return node_send(short_addr, 0x12, NULL, 0); }
+bool modulus_wireless_zb_node_set_status_led(uint16_t short_addr, int8_t gpio, uint8_t flags)
+{
+    uint8_t payload[] = {(uint8_t)gpio, flags};
+    if (s_node_info.short_addr == short_addr) {
+        s_node_info.status_led_gpio = gpio; s_node_info.status_led_flags = flags; s_node_info.generation++;
+    }
+    return node_send(short_addr, 0x14, payload, sizeof(payload));
 }
 
 uint8_t modulus_wireless_zb_permit_remaining(void)

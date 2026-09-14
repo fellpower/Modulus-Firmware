@@ -18,6 +18,8 @@ void modulus_wireless_rpc_poll_state(bool zigbee_on, bool thread_on);
 bool modulus_wireless_zb_join(void);
 bool modulus_wireless_zb_leave(void);
 bool modulus_wireless_zb_permit_join(uint8_t seconds);
+bool modulus_wireless_zb_get_state(void);
+bool modulus_wireless_zb_get_devices(void);
 bool modulus_wireless_zb_set_level(const modulus_zb_device_t *dev, uint8_t level);
 bool modulus_wireless_zb_cover(const modulus_zb_device_t *dev, uint8_t op);
 bool modulus_wireless_zb_thermo_sp(const modulus_zb_device_t *dev, uint16_t sp_c_x10);
@@ -30,6 +32,42 @@ bool modulus_wireless_zb_group_set(const modulus_zb_device_t *dev,
 bool modulus_wireless_zb_group_onoff(uint16_t group_id, uint8_t op);
 bool modulus_wireless_zb_dev_leave(const char *ieee_hex);
 bool modulus_wireless_zb_energy_scan(void);
+typedef struct {
+    uint16_t short_addr;
+    uint8_t protocol_version;
+    uint8_t channel_count;
+    uint8_t max_channels;
+    int8_t status_led_gpio;
+    uint8_t status_led_flags;
+    char name[32];
+    uint32_t generation;
+    uint8_t last_command;
+    uint8_t last_status;
+} modulus_zb_node_info_t;
+typedef struct {
+    bool apply_pending;
+    uint16_t poll_interval_s;
+    int16_t temperature_centi_c;
+    uint8_t temperature_state; /* 0 waiting, 1 valid, 2 sensor error, 3 stale, 4 apply pending */
+    bool digital_value;
+    uint8_t digital_state; /* 0 waiting, 1 valid, 2 stale, 3 apply pending */
+    uint8_t index;
+    uint8_t type;
+    int8_t gpio;
+    uint8_t flags;
+    char name[24];
+    bool valid;
+} modulus_zb_node_channel_t;
+bool modulus_wireless_zb_node_request(uint16_t short_addr);
+bool modulus_wireless_zb_node_get_info(modulus_zb_node_info_t *out);
+bool modulus_wireless_zb_node_get_channel(uint8_t index, modulus_zb_node_channel_t *out);
+bool modulus_wireless_zb_node_set_name(uint16_t short_addr, const char *name);
+bool modulus_wireless_zb_node_set_channel(uint16_t short_addr, uint8_t index,
+                                         uint8_t type, int8_t gpio, uint8_t flags,
+                                         const char *name);
+bool modulus_wireless_zb_node_set_poll(uint16_t short_addr, uint8_t index, uint16_t seconds);
+bool modulus_wireless_zb_node_apply(uint16_t short_addr);
+bool modulus_wireless_zb_node_set_status_led(uint16_t short_addr, int8_t gpio, uint8_t flags);
 /* Color Control (0x0300): mode 0 = CCT (a=mireds, b=trans ds), mode 1 = hue/sat. */
 bool modulus_wireless_zb_color(const modulus_zb_device_t *dev, uint8_t mode,
                                       uint16_t a, uint16_t b);

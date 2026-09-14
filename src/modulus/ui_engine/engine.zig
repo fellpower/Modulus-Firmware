@@ -37,6 +37,7 @@ const m_panel_probe = @import("m_panel_probe.zig");
 const m_panel_sd = @import("m_panel_sd.zig");
 const m_panel_zigbee = @import("m_panel_zigbee.zig");
 const m_panel_c6_ota = @import("m_panel_c6_ota.zig");
+const m_panel_nano_ota = @import("m_panel_nano_ota.zig");
 const m_panel_s3_ota = @import("m_panel_s3_ota.zig");
 const zb_exposes = @import("zb_exposes.zig");
 const sd_volume = @import("sd_volume.zig");
@@ -84,11 +85,12 @@ const settings_header_h: i32 = settings_form.title_h;
 const cat_item_h: i32 = settings_form.cat_item_h;
 /// Splash length in wall-clock seconds — host demo and Tab5 tick at different
 /// rates, so counting frames made the splash scale with the loop period.
-const boot_seconds: f32 = 3.0;
+const boot_seconds: f32 = 5.0;
 /// Host product line (System & about + splash).
 pub const ui_engine_product: []const u8 = "ZIG UI Engine";
 pub const ui_engine_version: []const u8 = "V1.0";
 const boot_credit: []const u8 = "Driven by M5Stack | Powered by Zig | Built on ESP-IDF";
+const boot_ota_credit: []const u8 = "OTA VERSION BY FELLPOWER";
 
 const FocusKind = enum { none, gear, power, search, close };
 
@@ -180,6 +182,8 @@ pub const Engine = struct {
     c6_ota_poll_sink: ?*const fn (*Engine) void = null,
     s3_ota_cmd_sink: ?*const fn (*Engine, m_panel_s3_ota.Action, u8) void = null,
     s3_ota_poll_sink: ?*const fn (*Engine) void = null,
+    nano_ota_cmd_sink: ?*const fn (*Engine, m_panel_nano_ota.Action, u8) void = null,
+    nano_ota_poll_sink: ?*const fn (*Engine) void = null,
     /// A USB G-code file is armed as the pending job. Set by the Load confirm,
     /// cleared by the bridge when the streamer goes terminal. While set, Cycle
     /// Start starts the pendant stream instead of a plain controller resume.
@@ -295,6 +299,8 @@ pub const Engine = struct {
     cnc_prof_layout: settings_cnc_modals.ProfLayout = .{},
     cnc_dump: settings_cnc_modals.DumpState = .{},
     cnc_rename_slot: u8 = 0,
+    zb_rename_idx: u8 = 0,
+    zb_node_channel_idx: u8 = 0,
     cnc_overlay_fx: spring.Spring = spring.Spring.effects(0),
     dash_overlay: settings_dashboard_modals.Kind = .none,
     dash_wcs_layout: settings_dashboard_modals.WcsLayout = .{},
@@ -386,6 +392,8 @@ pub const Engine = struct {
     m_panel_c6_ota_state: m_panel_c6_ota.State = .{},
     m_panel_s3_ota_layout: m_panel_s3_ota.Layout = .{},
     m_panel_s3_ota_state: m_panel_s3_ota.State = .{},
+    m_panel_nano_ota_layout: m_panel_nano_ota.Layout = .{},
+    m_panel_nano_ota_state: m_panel_nano_ota.State = .{},
     m_panel_tool: u8 = 0xff,
     needs_full_repaint: bool = true,
     /// After full paint on settings: present window AABB only (margins unchanged).
@@ -570,13 +578,18 @@ pub const Engine = struct {
         const gap = tokens.Space.xl;
         const title_h = tokens.TypeRole.display_l.lineHeight();
         const cap_h = tokens.TypeRole.label_l.lineHeight();
-        const block_h = title_h + gap + cap_h + gap + cap_h;
+        const ota_h = tokens.TypeRole.title_m.lineHeight();
+        const block_h = title_h + tokens.Space.md + ota_h + gap + cap_h + gap + cap_h;
         var y: i32 = @divTrunc(@as(i32, tokens.Logical.height) - block_h, 2);
 
         const tw = font.textWidthStr(title, .display_l) + title_track * @as(i32, @intCast(title.len -| 1));
         const tx = @divTrunc(@as(i32, tokens.Logical.width) - tw, 2);
         font.drawTextRoleTracked(&self.logical, tx, y, title, self.theme.primary, .display_l, title_track, false);
-        y += title_h + gap;
+        y += title_h + tokens.Space.md;
+
+        const ow = font.textWidthStr(boot_ota_credit, .title_m);
+        font.drawTextRole(&self.logical, @divTrunc(@as(i32, tokens.Logical.width) - ow, 2), y, boot_ota_credit, self.theme.primary, .title_m);
+        y += ota_h + gap;
 
         const cw = font.textWidthStr(boot_credit, .label_l);
         font.drawTextRole(&self.logical, @divTrunc(@as(i32, tokens.Logical.width) - cw, 2), y, boot_credit, self.theme.on_surface_variant, .label_l);
@@ -731,6 +744,13 @@ pub const Engine = struct {
                     &self.logical,
                     self.theme,
                     &self.m_panel_s3_ota_state,
+                    self.m_panel_fx.value,
+                );
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.nano_update)) {
+                self.m_panel_nano_ota_layout = m_panel_nano_ota.paint(
+                    &self.logical,
+                    self.theme,
+                    &self.m_panel_nano_ota_state,
                     self.m_panel_fx.value,
                 );
             } else {
@@ -3827,6 +3847,50 @@ pub const Engine = struct {
             },
             .wl_pass => settings_prefs.WirelessPrefs.setDraftField(&self.prefs.wireless.draft_pass, txt),
             .wl_zb_code => settings_prefs.WirelessPrefs.setDraftField(&self.prefs.wireless.zb_install, txt),
+            .wl_zb_name => {
+                if (txt.len == 0) {
+                    self.showSnackbarError("Name required");
+                    return;
+                }
+                if (self.emitWireless(.{ .zb_rename = .{ .idx = self.zb_rename_idx, .name = txt } })) {
+                    self.showSnackbar("Device renamed");
+                }
+            },
+            .wl_zb_node_name => {
+                if (txt.len == 0) { self.showSnackbarError("Name required"); return; }
+                _ = self.emitWireless(.{ .zb_node_name = txt });
+            },
+            .wl_zb_node_poll => {
+                const seconds = std.fmt.parseInt(u16, txt, 10) catch 0;
+                if (seconds < 15 or seconds > 3600) { self.showSnackbarError("Poll interval: 15-3600 seconds"); return; }
+                const i = self.zb_node_channel_idx;
+                if (i < self.prefs.wireless.zb_node_channels.len) {
+                    self.prefs.wireless.zb_node_channels[i].poll_interval_s = seconds;
+                    _ = self.emitWireless(.{ .zb_node_poll = .{ .index=i, .seconds=seconds } });
+                }
+            },
+            .wl_zb_node_gpio => if (txt.len == 0) {
+                const i = self.zb_node_channel_idx;
+                if (i == 0xff) {
+                    self.prefs.wireless.zb_node_led_gpio = -1;
+                    _ = self.emitWireless(.{ .zb_node_status_led = .{ .gpio = -1, .flags = self.prefs.wireless.zb_node_led_flags } });
+                } else if (i < self.prefs.wireless.zb_node_channels.len) {
+                    self.prefs.wireless.zb_node_channels[i].gpio = -1;
+                    const ch = &self.prefs.wireless.zb_node_channels[i];
+                    _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                }
+            } else if (self.pad.parseU32()) |v| {
+                if (v > 30) { self.showSnackbarError("GPIO must be 0 to 30"); return; }
+                const i = self.zb_node_channel_idx;
+                if (i == 0xff) {
+                    self.prefs.wireless.zb_node_led_gpio = @intCast(v);
+                    _ = self.emitWireless(.{ .zb_node_status_led = .{ .gpio = @intCast(v), .flags = self.prefs.wireless.zb_node_led_flags } });
+                } else if (i < self.prefs.wireless.zb_node_channels.len) {
+                    self.prefs.wireless.zb_node_channels[i].gpio = @intCast(v);
+                    const ch = &self.prefs.wireless.zb_node_channels[i];
+                    _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                }
+            },
             .wl_th_node => settings_prefs.WirelessPrefs.setDraftField(&self.prefs.wireless.th_node, txt),
             .wl_bt_passkey => settings_prefs.WirelessPrefs.setDraftField(&self.prefs.wireless.bt_passkey, txt),
             .wl_en_mac => {
@@ -4777,6 +4841,53 @@ pub const Engine = struct {
                         self.requestFull();
                         return;
                     }
+                    if (r.hit == .wl_zb_rename) {
+                        self.zb_rename_idx = r.aux;
+                        self.openTextPad(.wl_zb_name, "Device name", self.prefs.wireless.zbDevLabel(r.aux));
+                        return;
+                    }
+                    if (r.hit == .wl_zb_node) {
+                        self.prefs.wireless.zb_node_open = true;
+                        self.prefs.wireless.zb_node_ready = false;
+                        self.prefs.wireless.zb_node_idx = r.aux;
+                        _ = self.emitWireless(.{ .zb_node_open = r.aux });
+                        self.requestFull(); return;
+                    }
+                    if (r.hit == .wl_zb_node_close) {
+                        self.prefs.wireless.zb_node_open = false; self.requestFull(); return;
+                    }
+                    if (r.hit == .wl_zb_node_name) {
+                        self.openTextPad(.wl_zb_node_name, "Node name", std.mem.sliceTo(&self.prefs.wireless.zb_node_name, 0)); return;
+                    }
+                    if (r.hit == .wl_zb_node_type) {
+                        const i = r.aux; if (i < self.prefs.wireless.zb_node_channels.len) {
+                            const ch = &self.prefs.wireless.zb_node_channels[i]; ch.typ = (ch.typ + 1) % 5;
+                            _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                        }
+                        self.requestFull(); return;
+                    }
+                    if (r.hit == .wl_zb_node_gpio) {
+                        self.zb_node_channel_idx = r.aux;
+                        const gpio = self.prefs.wireless.zb_node_channels[r.aux].gpio;
+                        self.openNumberForTarget(.wl_zb_node_gpio, "GPIO 0-30 (empty = None)", if (gpio < 0) 0 else @intCast(gpio)); return;
+                    }
+                    if (r.hit == .wl_zb_node_polarity) {
+                        const i = r.aux; if (i < self.prefs.wireless.zb_node_channels.len) {
+                            const ch = &self.prefs.wireless.zb_node_channels[i]; ch.flags ^= 1;
+                            _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                        }
+                        self.requestFull(); return;
+                    }
+                    if (r.hit == .wl_zb_node_pullup) {
+                        const i = r.aux; if (i < self.prefs.wireless.zb_node_channels.len) {
+                            const ch = &self.prefs.wireless.zb_node_channels[i]; ch.flags ^= 2;
+                            _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                        }
+                        self.requestFull(); return;
+                    }
+                    if (r.hit == .wl_zb_node_apply) {
+                        _ = self.emitWireless(.zb_node_apply); self.showSnackbar("Node restarting..."); self.requestFull(); return;
+                    }
                     if (r.hit == .wl_zb_remove) {
                         if (!self.emitWireless(.{ .zb_remove = r.aux })) {
                             if (r.aux < self.prefs.wireless.live_zb_n) {
@@ -5603,6 +5714,11 @@ pub const Engine = struct {
         switch (h.kind) {
             .none => {},
             .back, .scrim => {
+                if (self.prefs.wireless.zb_node_open) {
+                    self.prefs.wireless.zb_node_open = false;
+                    self.requestFull();
+                    return;
+                }
                 self.closeZbMenu();
                 self.returnToMPanelFromTool();
             },
@@ -5718,6 +5834,83 @@ pub const Engine = struct {
                 }
                 self.requestFull();
             },
+            .configure => {
+                self.prefs.wireless.zb_node_open = true;
+                self.prefs.wireless.zb_node_ready = false;
+                self.prefs.wireless.zb_node_idx = h.dev;
+                self.prefs.wireless.zb_node_page = 0;
+                self.m_panel_zb_scroll = 0;
+                _ = self.emitWireless(.{ .zb_node_open = h.dev });
+                self.requestFull();
+            },
+            .node_name => self.openTextPad(.wl_zb_node_name, "Node name", std.mem.sliceTo(&self.prefs.wireless.zb_node_name, 0)),
+            .node_led_gpio => {
+                self.zb_node_channel_idx = 0xff;
+                const gpio = self.prefs.wireless.zb_node_led_gpio;
+                self.openNumberForTarget(.wl_zb_node_gpio, "LED GPIO 0-30 (empty = None)", if (gpio < 0) 0 else @intCast(gpio));
+            },
+            .node_led_polarity => {
+                self.prefs.wireless.zb_node_led_flags ^= 1;
+                _ = self.emitWireless(.{ .zb_node_status_led = .{ .gpio = self.prefs.wireless.zb_node_led_gpio, .flags = self.prefs.wireless.zb_node_led_flags } });
+                self.requestFull();
+            },
+            .node_type => {
+                const i = h.dev;
+                const ch = &self.prefs.wireless.zb_node_channels[i];
+                ch.typ = (ch.typ + 1) % 5;
+                _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                self.requestFull();
+            },
+            .node_gpio => {
+                self.zb_node_channel_idx = h.dev;
+                const gpio = self.prefs.wireless.zb_node_channels[h.dev].gpio;
+                self.openNumberForTarget(.wl_zb_node_gpio, "GPIO 0-30 (empty = None)", if (gpio < 0) 0 else @intCast(gpio));
+            },
+            .node_poll => {
+                self.zb_node_channel_idx = h.dev;
+                self.openNumberForTarget(.wl_zb_node_poll, "Poll interval: 15-3600 seconds", self.prefs.wireless.zb_node_channels[h.dev].poll_interval_s);
+            },
+            .node_polarity => {
+                const i = h.dev;
+                const ch = &self.prefs.wireless.zb_node_channels[i];
+                ch.flags ^= 1;
+                _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                self.requestFull();
+            },
+            .node_pullup => {
+                const i = h.dev;
+                const ch = &self.prefs.wireless.zb_node_channels[i];
+                ch.flags ^= 2;
+                _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                self.requestFull();
+            },
+            .node_apply => {
+                _ = self.emitWireless(.zb_node_apply);
+                self.prefs.wireless.zb_node_open = false;
+                self.showSnackbar("Node restarting...");
+                self.requestFull();
+            },
+            .node_close => {
+                self.prefs.wireless.zb_node_open = false;
+                self.requestFull();
+            },
+            .node_prev => {
+                self.prefs.wireless.zb_node_page -|= 1;
+                self.requestFull();
+            },
+            .node_next => {
+                const pages = self.prefs.wireless.zb_node_channel_count + 1;
+                if (self.prefs.wireless.zb_node_page + 1 < pages) {
+                    self.prefs.wireless.zb_node_page += 1;
+                } else if (self.prefs.wireless.zb_node_channel_count < self.prefs.wireless.zb_node_channels.len) {
+                    const i = self.prefs.wireless.zb_node_channel_count;
+                    self.prefs.wireless.zb_node_channels[i] = .{};
+                    self.prefs.wireless.zb_node_channel_count += 1;
+                    self.prefs.wireless.zb_node_page = i + 1;
+                    _ = self.emitWireless(.{ .zb_node_channel = .{ .index=i, .typ=0, .gpio=-1, .flags=0, .name="Channel" } });
+                }
+                self.requestFull();
+            },
             .exposes => {
                 self.showSnackbar("Exposes - see Settings > Wireless");
             },
@@ -5773,6 +5966,10 @@ pub const Engine = struct {
             self.m_panel_s3_ota_state.view = .dashboard;
             if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
             if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
+        }
+        if (index == @intFromEnum(m_panel.ToolId.nano_update)) {
+            self.m_panel_nano_ota_state.view = .dashboard;
+            if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
         }
         if (index == @intFromEnum(m_panel.ToolId.terminal) and self.m_panel_term_auto_scroll) {
             self.terminalFollowTail();
@@ -5894,6 +6091,28 @@ pub const Engine = struct {
                         self.m_panel_s3_ota_state.view = .review;
                     },
                     .cancel, .apply => {},
+                }
+                self.requestFull();
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.nano_update)) {
+                if (self.m_panel_nano_ota_state.phase == .flashing) {
+                    self.requestFull();
+                    return;
+                }
+                const h = m_panel_nano_ota.hit(self.m_panel_nano_ota_layout, x, y);
+                switch (h.kind) {
+                    .none => {},
+                    .scrim, .back => self.returnToMPanelFromTool(),
+                    .exit => self.closeToolToDashboard(),
+                    .detail_back => self.m_panel_nano_ota_state.view = .dashboard,
+                    .firmware => self.m_panel_nano_ota_state.view = .firmware,
+                    .refresh => if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0),
+                    .row => if (self.nano_ota_cmd_sink) |sink| sink(self, .select, h.index),
+                    .check => if (self.m_panel_nano_ota_state.file_count > 0) {
+                        if (self.nano_ota_cmd_sink) |sink| sink(self, .check, 0);
+                    },
+                    .flash => if (self.m_panel_nano_ota_state.phase == .armed) {
+                        if (self.nano_ota_cmd_sink) |sink| sink(self, .flash, 0);
+                    },
                 }
                 self.requestFull();
             } else if (m_panel.hitTool(self.m_panel_tool_layout, x, y)) {
@@ -6946,8 +7165,8 @@ test "boot hold does not drain until armed" {
     eng.armBootHold();
     _ = eng.tick(0.05);
     try std.testing.expect(eng.screen == .boot);
-    try std.testing.expect(eng.boot_left_sec < 3.0);
-    try std.testing.expect(eng.boot_left_sec > 2.9);
+    try std.testing.expect(eng.boot_left_sec < boot_seconds);
+    try std.testing.expect(eng.boot_left_sec > boot_seconds - 0.1);
 }
 
 test "boot splash primary follows accent and dark mode" {
@@ -6986,7 +7205,7 @@ test "dashboard screen after boot" {
     var eng = try Engine.create(gpa);
     defer eng.destroy(gpa);
     try std.testing.expect(eng.screen == .boot);
-    try std.testing.expectEqual(@as(f32, 3.0), eng.boot_left_sec);
+    try std.testing.expectEqual(boot_seconds, eng.boot_left_sec);
     eng.handleClick(100, 100); // LVGL: splash ignores tap
     try std.testing.expect(eng.screen == .boot);
     eng.skipBoot();

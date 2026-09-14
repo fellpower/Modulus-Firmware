@@ -20,12 +20,14 @@ pub const headers = [_][]const u8{
     "storage_shim.h",
     "c6_ota_shim.h",
     "s3_ota_shim.h",
+    "nano_ota_shim.h",
     "touch_shim.h",
     "transport_shim.h",
     "ui_shim.h",
     "wireless_shim.h",
+    "wireless_rpc.h",
 };
 
 test "shim: bundle header count" {
-    try @import("std").testing.expectEqual(@as(usize, 21), headers.len);
+    try @import("std").testing.expectEqual(@as(usize, 22), headers.len);
 }

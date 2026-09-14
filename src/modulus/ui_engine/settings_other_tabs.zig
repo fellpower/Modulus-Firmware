@@ -95,6 +95,15 @@ pub const Hit = enum(u16) {
     wl_zb_dev1,
     wl_zb_dev,
     wl_zb_identify,
+    wl_zb_rename,
+    wl_zb_node,
+    wl_zb_node_name,
+    wl_zb_node_type,
+    wl_zb_node_gpio,
+    wl_zb_node_polarity,
+    wl_zb_node_pullup,
+    wl_zb_node_apply,
+    wl_zb_node_close,
     wl_zb_remove,
     wl_zb_refresh,
     wl_zb_sensors,
@@ -410,7 +419,10 @@ pub fn applyHit(prefs: *prefs_mod.Prefs, hit: Hit, seg: ?usize, x: i32, y: i32, 
                 prefs.wireless.zb_dev_on[idx] = !prefs.wireless.zb_dev_on[idx];
             }
         },
-        .wl_zb_identify, .wl_zb_remove, .wl_zb_refresh, .wl_zb_sensors => {},
+        .wl_zb_identify, .wl_zb_rename, .wl_zb_node, .wl_zb_node_name,
+        .wl_zb_node_type, .wl_zb_node_gpio, .wl_zb_node_polarity, .wl_zb_node_pullup,
+        .wl_zb_node_apply, .wl_zb_node_close,
+        .wl_zb_remove, .wl_zb_refresh, .wl_zb_sensors => {},
         .wl_th_dev0 => if (prefs.wireless.th_dev_n > 0) {
             prefs.wireless.th_dev_on[0] = !prefs.wireless.th_dev_on[0];
         },
@@ -1028,11 +1040,39 @@ fn paintWireless(logical: *fb.LogicalFb, theme: tokens.Theme, w: prefs_mod.Wirel
                         while (di < show_n) : (di += 1) {
                             const dev_on = if (di < w.zb_dev_on.len) w.zb_dev_on[di] else false;
                             lay.pushAux(.wl_zb_dev, form.paintToggle(logical, theme, &cur, scroll, w.zbDevLabel(di), dev_on), .toggle, @intCast(di));
+                            lay.pushAux(.wl_zb_rename, form.paintAction(logical, theme, &cur, scroll, "Name", w.zbDevLabel(di)), .action, @intCast(di));
+                            lay.pushAux(.wl_zb_node, form.paintAction(logical, theme, &cur, scroll, "Configure Node", ""), .action, @intCast(di));
                             lay.pushAux(.wl_zb_identify, form.paintAction(logical, theme, &cur, scroll, "Identify", "blink 5s"), .action, @intCast(di));
                             lay.pushAux(.wl_zb_remove, form.paintDestructiveAction(logical, theme, &cur, scroll, "Remove device", ""), .action, @intCast(di));
                             if (form.isAdvanced()) {
                                 lay.pushAux(.wl_zb_sensors, form.paintAction(logical, theme, &cur, scroll, "Read sensors / LQI", ""), .action, @intCast(di));
                             }
+                        }
+                    }
+                    if (w.zb_node_open) {
+                        form.paintSection(logical, theme, &cur, scroll, "Modulus Node configuration");
+                        if (!w.zb_node_ready) {
+                            form.paintDetailStatus(logical, theme, &cur, scroll, "Node", "Waiting for response...", .warn);
+                            lay.push(.wl_zb_node_close, form.paintAction(logical, theme, &cur, scroll, "Close", ""), .action);
+                        } else {
+                            lay.push(.wl_zb_node_name, form.paintAction(logical, theme, &cur, scroll, "Device name", std.mem.sliceTo(&w.zb_node_name, 0)), .action);
+                            const type_names = [_][]const u8{ "Disabled", "Switch", "Digital output", "Digital input", "DS18B20" };
+                            const channel_n = @min(@as(usize, w.zb_node_channel_count), @as(usize, 4));
+                            var ci: usize = 0;
+                            while (ci < channel_n) : (ci += 1) {
+                                const ch = &w.zb_node_channels[ci];
+                                var title: [32]u8 = undefined;
+                                var gpio_text: [12]u8 = undefined;
+                                const channel_title = std.fmt.bufPrint(&title, "Channel {d} function", .{ci + 1}) catch "Channel";
+                                lay.pushAux(.wl_zb_node_type, form.paintAction(logical, theme, &cur, scroll, channel_title, type_names[@min(@as(usize, ch.typ), type_names.len - 1)]), .action, @intCast(ci));
+                                const gpio = if (ch.gpio < 0) "Not assigned" else std.fmt.bufPrint(&gpio_text, "GPIO {d}", .{ch.gpio}) catch "?";
+                                lay.pushAux(.wl_zb_node_gpio, form.paintAction(logical, theme, &cur, scroll, "GPIO", gpio), .action, @intCast(ci));
+                                lay.pushAux(.wl_zb_node_polarity, form.paintToggle(logical, theme, &cur, scroll, "Active low", (ch.flags & 1) != 0), .toggle, @intCast(ci));
+                                if (ch.typ == 3) lay.pushAux(.wl_zb_node_pullup, form.paintToggle(logical, theme, &cur, scroll, "Internal pull-up", (ch.flags & 2) != 0), .toggle, @intCast(ci));
+                            }
+                            form.paintNote(logical, theme, &cur, scroll, "Changes are saved on the node. Apply restarts it with the new endpoints.");
+                            lay.push(.wl_zb_node_apply, form.paintActionAccent(logical, theme, &cur, scroll, "Apply and restart node", ""), .action);
+                            lay.push(.wl_zb_node_close, form.paintAction(logical, theme, &cur, scroll, "Close", ""), .action);
                         }
                     }
                     lay.push(.wl_zb_refresh, form.paintAction(logical, theme, &cur, scroll, "Refresh device list", "Ask hub"), .action);

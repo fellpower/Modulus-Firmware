@@ -1,8 +1,10 @@
-# Modulus NanoH2 — 4 MB flash, single app + ZBOSS NVRAM.
+# Modulus NanoH2 — 4 MB flash, dual OTA app slots + ZBOSS NVRAM.
 # zb_storage/zb_fct REQUIRED or esp_zb_start fails and the network never forms.
 # Name,       Type, SubType, Offset,   Size
 nvs,          data, nvs,     0x9000,   0x6000
-phy_init,     data, phy,     0xf000,   0x1000
-factory,      app,  factory, 0x10000,  0x2E0000
-zb_storage,   data, fat,     0x2F0000, 0x4000
-zb_fct,       data, fat,     0x2F4000, 0x400
+otadata,      data, ota,     0xf000,   0x2000
+phy_init,     data, phy,     0x11000,  0x1000
+ota_0,        app,  ota_0,   0x20000,  0x1D0000
+ota_1,        app,  ota_1,   0x1F0000, 0x1D0000
+zb_storage,   data, fat,     0x3C0000, 0x4000
+zb_fct,       data, fat,     0x3C4000, 0x400

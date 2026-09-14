@@ -72,7 +72,13 @@ static void rx_task(void *arg)
     uint8_t chunk[64];
 
     for (;;) {
-        const int n = uart_read_bytes(LINK_UART, chunk, sizeof(chunk), pdMS_TO_TICKS(250));
+        int n = uart_read_bytes(LINK_UART, chunk, 1, portMAX_DELAY);
+        size_t waiting = 0;
+        if (n == 1 && uart_get_buffered_data_len(LINK_UART, &waiting) == ESP_OK && waiting) {
+            const size_t take = waiting < sizeof(chunk) - 1 ? waiting : sizeof(chunk) - 1;
+            const int extra = uart_read_bytes(LINK_UART, chunk + 1, take, 0);
+            if (extra > 0) n += extra;
+        }
         for (int i = 0; i < n; i++) {
             const uint8_t b = chunk[i];
             switch (st) {

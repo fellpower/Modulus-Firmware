@@ -8,8 +8,8 @@
  * ESP_ZIGBEE_IF channel; the byte protocol (zb_link_proto.h) is unchanged.
  *
  * Wiring (Tab5 M5BUS <-> NanoH2 Grove):
- *   M5BUS pin 16 G14/TXD2 (P4 GPIO6)  -> Grove G2 yellow (H2 RX)
- *   M5BUS pin 15 G13/RXD2 (P4 GPIO7) <-  Grove G1 white  (H2 TX)
+ *   M5BUS pin 16 G6/PC_TX (P4 GPIO6)  -> Grove G2 yellow (H2 RX)
+ *   M5BUS pin 15 G7/PC_RX (P4 GPIO7) <-  Grove G1 white  (H2 TX)
  *   M5BUS GND (1/3/5) -> Grove GND;  M5BUS pin 28 SYS_EXT5VO -> Grove 5V
  *
  * Frame: [0xA5][len_lo][len_hi][payload:len][crc8(payload), poly 0x07]
@@ -37,6 +37,10 @@ bool modulus_zb_uart_send_cmd(const uint8_t *cmd_payload, uint16_t len);
  * Only call from non-LVGL tasks (e.g. zb_auto worker).
  */
 bool modulus_zb_uart_send_cmd_sync(const uint8_t *cmd_payload, uint16_t len);
+
+/* Reserve the command channel for a bulk OTA transfer. While enabled,
+ * fire-and-forget Zigbee traffic is rejected and sync OTA jobs take priority. */
+void modulus_zb_uart_set_ota_mode(bool enabled);
 
 /* RX path: feed ACK/NAK from zigbee_rx so send_cmd can unblock. */
 void modulus_zb_uart_note_ack(uint8_t seq, bool nak, uint8_t reason);

@@ -5,10 +5,12 @@
 #include "zigbee_hub.h"
 #include "zb_proto.h"
 #include "zb_uart_link.h"
+#include "nano_ota.h"
 
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_zigbee_core.h"
+#include "nvs.h"
 #include "ha/esp_zigbee_ha_standard.h"
 #include "nwk/esp_zigbee_nwk.h"
 #include "zcl/esp_zigbee_zcl_common.h"
@@ -49,6 +51,35 @@ static bool          s_form_after_scan;
 static uint8_t       s_permit_s;
 static uint8_t       s_reply_seq; /* non-zero while handling a sequenced host cmd */
 static hub_dev_t     s_devs[HUB_DEV_MAX];
+static bool          s_devs_loaded;
+
+#define HUB_DEV_STORE_VERSION 1
+
+static void dev_store_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("zb_hub", NVS_READWRITE, &h) != ESP_OK) return;
+    (void)nvs_set_u8(h, "dev_ver", HUB_DEV_STORE_VERSION);
+    (void)nvs_set_blob(h, "devices", s_devs, sizeof(s_devs));
+    (void)nvs_commit(h);
+    nvs_close(h);
+}
+
+static void dev_store_load(void)
+{
+    if (s_devs_loaded) return;
+    s_devs_loaded = true;
+    nvs_handle_t h;
+    if (nvs_open("zb_hub", NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t version = 0;
+    size_t size = sizeof(s_devs);
+    if (nvs_get_u8(h, "dev_ver", &version) != ESP_OK ||
+        version != HUB_DEV_STORE_VERSION ||
+        nvs_get_blob(h, "devices", s_devs, &size) != ESP_OK || size != sizeof(s_devs)) {
+        memset(s_devs, 0, sizeof(s_devs));
+    }
+    nvs_close(h);
+}
 
 #define HUB_HEARTBEAT_TICKS 20 /* 20 * 100 ms = 2 s (was 5 s) */
 
@@ -160,29 +191,43 @@ static void dev_upsert_joined(uint16_t short_addr, const uint8_t ieee_msb_in[8])
     }
     d->short_addr = short_addr;
     memcpy(d->ieee_msb, ieee_msb_in, 8);
+    dev_store_save();
 }
 
 static void dev_set_caps(uint16_t short_addr, uint8_t ep, uint8_t caps, uint16_t device_id)
 {
-    hub_dev_t *d = dev_find_short(short_addr);
+    hub_dev_t *d = NULL;
+    hub_dev_t *base = NULL;
+    for (int i = 0; i < HUB_DEV_MAX; i++) {
+        if (!s_devs[i].used || s_devs[i].short_addr != short_addr) continue;
+        if (!base) base = &s_devs[i];
+        if (s_devs[i].ep == ep) { d = &s_devs[i]; break; }
+    }
+    if (!d && base && base->ep == 0) d = base;
     if (!d) {
         d = dev_alloc();
         if (!d) {
             return;
         }
         d->short_addr = short_addr;
+        if (base) memcpy(d->ieee_msb, base->ieee_msb, sizeof(d->ieee_msb));
     }
     d->ep = ep;
     d->caps = caps;
     d->device_id = device_id;
+    dev_store_save();
 }
 
 static void dev_remove_ieee(const uint8_t ieee_msb_in[8])
 {
-    hub_dev_t *d = dev_find_ieee(ieee_msb_in);
-    if (d) {
-        d->used = false;
+    bool changed = false;
+    for (int i = 0; i < HUB_DEV_MAX; i++) {
+        if (s_devs[i].used && memcmp(s_devs[i].ieee_msb, ieee_msb_in, 8) == 0) {
+            s_devs[i].used = false;
+            changed = true;
+        }
     }
+    if (changed) dev_store_save();
 }
 
 static void hub_bdb_commission(uint8_t mode)
@@ -309,8 +354,10 @@ static uint8_t caps_from_simple_desc(const esp_zb_af_simple_desc_1_1_t *sd)
         switch (sd->app_cluster_list[i]) {
         case 0x0006: caps |= ZIGBEE_CAP_ONOFF; break;
         case 0x0008: caps |= ZIGBEE_CAP_LEVEL; break;
+        case 0x000F: caps |= ZIGBEE_CAP_SENSOR; break;
         case 0x0102: caps |= ZIGBEE_CAP_COVER; break;
         case 0x0201: caps |= ZIGBEE_CAP_THERMOSTAT; break;
+        case 0x0402: caps |= ZIGBEE_CAP_SENSOR; break;
         case 0x0500: caps |= ZIGBEE_CAP_SENSOR; break;
         case 0x0B04: caps |= ZIGBEE_CAP_POWER; break;
         case 0x0702: caps |= ZIGBEE_CAP_METER; break;
@@ -374,11 +421,15 @@ static void hub_active_ep_cb(esp_zb_zdp_status_t status, uint8_t ep_count,
         ESP_LOGW(TAG, "Active EP 0x%04x failed (%d)", short_addr, status);
         return;
     }
-    esp_zb_zdo_simple_desc_req_param_t req = {
-        .addr_of_interest = short_addr,
-        .endpoint = ep_id_list[0],
-    };
-    esp_zb_zdo_simple_desc_req(&req, hub_simple_desc_cb, (void *)(uintptr_t)short_addr);
+    for (uint8_t i = 0; i < ep_count; i++) {
+        /* Endpoint 0 is ZDO and has no application simple descriptor. */
+        if (ep_id_list[i] == 0) continue;
+        esp_zb_zdo_simple_desc_req_param_t req = {
+            .addr_of_interest = short_addr,
+            .endpoint = ep_id_list[i],
+        };
+        esp_zb_zdo_simple_desc_req(&req, hub_simple_desc_cb, (void *)(uintptr_t)short_addr);
+    }
 }
 
 static void hub_discover_caps(uint16_t short_addr)
@@ -484,6 +535,53 @@ static void hub_refresh_lqi(void)
 
 static void hub_dump_devices(void)
 {
+    /* ZBOSS keeps joined children in its persistent NWK neighbor table, while
+     * s_devs is rebuilt from DEVICE_ANNCE signals after every Nano reboot.
+     * Reconcile both here so a Tab5 scan can find devices which are already
+     * joined and therefore do not announce themselves again. */
+    typedef struct {
+        uint16_t short_addr;
+        uint8_t ieee_msb[8];
+        uint8_t lqi;
+        int8_t rssi;
+        uint8_t age;
+    } known_neighbor_t;
+    known_neighbor_t known[HUB_DEV_MAX];
+    uint8_t known_n = 0;
+
+    if (s_stack_ready && s_formed) {
+        esp_zb_nwk_info_iterator_t it = ESP_ZB_NWK_INFO_ITERATOR_INIT;
+        esp_zb_nwk_neighbor_info_t nbr;
+        esp_zb_lock_acquire(portMAX_DELAY);
+        while (known_n < HUB_DEV_MAX &&
+               esp_zb_nwk_get_next_neighbor(&it, &nbr) == ESP_OK) {
+            known[known_n].short_addr = nbr.short_addr;
+            ieee_msb(nbr.ieee_addr, known[known_n].ieee_msb);
+            known[known_n].lqi = nbr.lqi;
+            known[known_n].rssi = nbr.rssi;
+            known[known_n].age = nbr.age;
+            known_n++;
+        }
+        esp_zb_lock_release();
+    }
+
+    for (uint8_t i = 0; i < known_n; i++) {
+        hub_dev_t *d = dev_find_ieee(known[i].ieee_msb);
+        const bool rediscovered = d == NULL;
+        dev_upsert_joined(known[i].short_addr, known[i].ieee_msb);
+        d = dev_find_ieee(known[i].ieee_msb);
+        if (d) {
+            d->short_addr = known[i].short_addr;
+            d->lqi = known[i].lqi;
+            d->rssi = known[i].rssi;
+            d->age = known[i].age;
+        }
+        if (rediscovered) {
+            ESP_LOGI(TAG, "Rediscovered neighbor short=0x%04x", known[i].short_addr);
+            hub_discover_caps(known[i].short_addr);
+        }
+    }
+
     uint8_t n = 0;
     for (int i = 0; i < HUB_DEV_MAX; i++) {
         const hub_dev_t *d = &s_devs[i];
@@ -500,6 +598,19 @@ static void hub_dump_devices(void)
         ev[13] = (uint8_t)d->device_id;
         ev[14] = d->lqi;
         ev[15] = (uint8_t)d->rssi;
+        uint8_t joined[11];
+        joined[0] = ev[0];
+        joined[1] = ev[1];
+        memcpy(&joined[2], d->ieee_msb, 8);
+        joined[10] = 0;
+        send_evt(ZIGBEE_EVT_DEV_JOINED, joined, sizeof(joined));
+        if (d->ep) {
+            uint8_t caps[6] = {
+                ev[0], ev[1], d->ep, d->caps,
+                (uint8_t)(d->device_id >> 8), (uint8_t)d->device_id,
+            };
+            send_evt(ZIGBEE_EVT_DEV_CAPS, caps, sizeof(caps));
+        }
         send_evt(ZIGBEE_EVT_DEV_ENTRY, ev, sizeof(ev));
         n++;
     }
@@ -716,6 +827,24 @@ static void emit_dev_state(uint16_t short_addr, uint16_t cluster, uint16_t val)
     send_evt(ZIGBEE_EVT_DEV_STATE, evt, sizeof(evt));
 }
 
+static void emit_temperature(uint16_t addr, uint8_t ep, const esp_zb_zcl_attribute_t *attr)
+{
+    if (attr->id != 0 || attr->data.type != ESP_ZB_ZCL_ATTR_TYPE_S16 || attr->data.size != 2 || !attr->data.value) return;
+    const uint8_t *p = attr->data.value;
+    uint8_t evt[] = {(uint8_t)(addr >> 8), (uint8_t)addr, ep, p[1], p[0]};
+    send_evt(ZIGBEE_EVT_TEMPERATURE, evt, sizeof(evt));
+}
+
+static void emit_digital_input(uint16_t addr, uint8_t ep, const esp_zb_zcl_attribute_t *attr)
+{
+    if (attr->id != ESP_ZB_ZCL_ATTR_BINARY_INPUT_PRESENT_VALUE_ID ||
+        attr->data.type != ESP_ZB_ZCL_ATTR_TYPE_BOOL ||
+        attr->data.size != 1 || !attr->data.value) return;
+    uint8_t evt[] = {(uint8_t)(addr >> 8), (uint8_t)addr, ep,
+                     *(const uint8_t *)attr->data.value != 0};
+    send_evt(ZIGBEE_EVT_DIGITAL_INPUT, evt, sizeof(evt));
+}
+
 static esp_err_t hub_action_handler(esp_zb_core_action_callback_id_t callback_id,
                                     const void *message)
 {
@@ -729,6 +858,43 @@ static esp_err_t hub_action_handler(esp_zb_core_action_callback_id_t callback_id
         }
         return ESP_OK;
     }
+    if (callback_id == ESP_ZB_CORE_CMD_CUSTOM_CLUSTER_RESP_CB_ID ||
+        callback_id == ESP_ZB_CORE_CMD_CUSTOM_CLUSTER_REQ_CB_ID) {
+        const esp_zb_zcl_custom_cluster_command_message_t *rsp = message;
+        if (rsp->info.status == ESP_ZB_ZCL_STATUS_SUCCESS &&
+            rsp->info.cluster == 0xFC10 &&
+            rsp->info.command.direction == ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI &&
+            rsp->info.src_address.addr_type == ESP_ZB_ZCL_ADDR_TYPE_SHORT) {
+            const uint8_t *p = rsp->data.value;
+            uint16_t n = rsp->data.size;
+            if (p && n && p[0] == n - 1) { p++; n--; }
+            if (n > 96) n = 96;
+            uint8_t evt[3 + 96];
+            const uint16_t short_addr = rsp->info.src_address.u.short_addr;
+            evt[0] = (uint8_t)(short_addr >> 8);
+            evt[1] = (uint8_t)short_addr;
+            evt[2] = (uint8_t)rsp->info.command.id;
+            if (n) memcpy(evt + 3, p, n);
+            send_evt(ZIGBEE_EVT_NODE_CONFIG, evt, 3 + n);
+            if (rsp->info.command.id == 0x82 && n >= 5 && p[0] < 12 && p[1] == 4) {
+                static uint16_t measured_value = 0;
+                esp_zb_zcl_read_attr_cmd_t read = {
+                    .zcl_basic_cmd={.dst_addr_u.addr_short=short_addr, .dst_endpoint=10+p[0], .src_endpoint=HUB_EP},
+                    .address_mode=ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT, .clusterID=0x0402,
+                    .attr_number=1, .attr_field=&measured_value};
+                esp_zb_zcl_read_attr_cmd_req(&read);
+            } else if (rsp->info.command.id == 0x82 && n >= 5 && p[0] < 12 && p[1] == 3) {
+                static uint16_t on_off_value = ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID;
+                esp_zb_zcl_read_attr_cmd_t read = {
+                    .zcl_basic_cmd={.dst_addr_u.addr_short=short_addr, .dst_endpoint=10+p[0], .src_endpoint=HUB_EP},
+                    .address_mode=ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+                    .clusterID=ESP_ZB_ZCL_CLUSTER_ID_BINARY_INPUT,
+                    .attr_number=1, .attr_field=&on_off_value};
+                esp_zb_zcl_read_attr_cmd_req(&read);
+            }
+        }
+        return ESP_OK;
+    }
     if (callback_id == ESP_ZB_CORE_CMD_READ_ATTR_RESP_CB_ID) {
         const esp_zb_zcl_cmd_read_attr_resp_message_t *rr = message;
         if (rr->info.status != ESP_ZB_ZCL_STATUS_SUCCESS ||
@@ -736,6 +902,18 @@ static esp_err_t hub_action_handler(esp_zb_core_action_callback_id_t callback_id
             return ESP_OK;
         }
         const uint16_t cl = rr->info.cluster;
+        if (cl == 0x0402) {
+            for (esp_zb_zcl_read_attr_resp_variable_t *v=rr->variables; v; v=v->next)
+                if (v->status == ESP_ZB_ZCL_STATUS_SUCCESS)
+                    emit_temperature(rr->info.src_address.u.short_addr, rr->info.src_endpoint, &v->attribute);
+            return ESP_OK;
+        }
+        if (cl == ESP_ZB_ZCL_CLUSTER_ID_BINARY_INPUT) {
+            for (esp_zb_zcl_read_attr_resp_variable_t *v=rr->variables; v; v=v->next)
+                if (v->status == ESP_ZB_ZCL_STATUS_SUCCESS)
+                    emit_digital_input(rr->info.src_address.u.short_addr, rr->info.src_endpoint, &v->attribute);
+            return ESP_OK;
+        }
         if (cl == 0x0000) {
             /* Interview response: ZCL char strings [len][bytes], not
              * NUL-terminated. Cap 16 chars each; emit as mfr\0model\0. */
@@ -812,7 +990,13 @@ static esp_err_t hub_action_handler(esp_zb_core_action_callback_id_t callback_id
     const uint16_t attr = msg->attribute.id;
     uint16_t val = 0;
 
-    if (cl == 0x0006 && attr == 0x0000) {
+    if (cl == 0x0402) {
+        emit_temperature(short_addr, msg->src_endpoint, &msg->attribute);
+    } else if (cl == ESP_ZB_ZCL_CLUSTER_ID_BINARY_INPUT) {
+        emit_digital_input(short_addr, msg->src_endpoint, &msg->attribute);
+        val = *(const uint8_t *)msg->attribute.data.value;
+        emit_dev_state(short_addr, cl, val);
+    } else if (cl == 0x0006 && attr == 0x0000) {
         val = *(const uint8_t *)msg->attribute.data.value;
         emit_dev_state(short_addr, cl, val);
     } else if (cl == 0x0008 && attr == 0x0000) {
@@ -899,7 +1083,20 @@ static void hub_zb_task(void *arg)
     }
 
     esp_zb_on_off_switch_cfg_t sw_cfg = ESP_ZB_DEFAULT_ON_OFF_SWITCH_CONFIG();
-    esp_zb_device_register(esp_zb_on_off_switch_ep_create(HUB_EP, &sw_cfg));
+    esp_zb_cluster_list_t *hub_clusters = esp_zb_on_off_switch_clusters_create(&sw_cfg);
+    esp_zb_attribute_list_t *node_config_client = esp_zb_zcl_attr_list_create(0xFC10);
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_custom_cluster(hub_clusters, node_config_client,
+                                                           ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_temperature_meas_cluster(hub_clusters,
+        esp_zb_zcl_attr_list_create(0x0402), ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
+    ESP_ERROR_CHECK(esp_zb_cluster_list_add_binary_input_cluster(hub_clusters,
+        esp_zb_zcl_attr_list_create(0x000F), ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE));
+    esp_zb_ep_list_t *hub_eps = esp_zb_ep_list_create();
+    esp_zb_endpoint_config_t hub_ep = {.endpoint = HUB_EP,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_ON_OFF_SWITCH_DEVICE_ID, .app_device_version = 0};
+    ESP_ERROR_CHECK(esp_zb_ep_list_add_ep(hub_eps, hub_clusters, hub_ep));
+    ESP_ERROR_CHECK(esp_zb_device_register(hub_eps));
     esp_zb_core_action_handler_register(hub_action_handler);
     /* Max TX power (~+20 dBm on H2): dedicated hub, no coex neighbor to
      * protect — buy the extra range/link margin for free. */
@@ -925,6 +1122,7 @@ static void hub_zb_task(void *arg)
 
 void zigbee_hub_start(uint8_t channel)
 {
+    dev_store_load();
     if (channel >= 11 && channel <= 26) {
         s_req_channel = channel;
         s_channel_forced = true;
@@ -1225,6 +1423,74 @@ static void hub_color(const uint8_t *a, uint16_t n)
     send_ok();
 }
 
+/* Modulus Node configuration tunnel. The P4 supplies the node short address,
+ * Modulus command id, and command-specific bytes. Zigbee delivers replies
+ * asynchronously as ZIGBEE_EVT_NODE_CONFIG. */
+static void hub_node_config(const uint8_t *a, uint16_t n)
+{
+    if (!s_stack_ready || !s_formed || n < 3 || n > 98) {
+        send_fail(0x22);
+        return;
+    }
+    uint8_t wire[96];
+    const uint8_t payload_len = (uint8_t)(n - 3);
+    wire[0] = payload_len;
+    if (payload_len) memcpy(wire + 1, a + 3, payload_len);
+    esp_zb_zcl_custom_cluster_cmd_req_t cmd = {
+        .zcl_basic_cmd = {
+            .dst_addr_u.addr_short = (uint16_t)(((uint16_t)a[0] << 8) | a[1]),
+            .dst_endpoint = 1,
+            .src_endpoint = HUB_EP,
+        },
+        .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+        .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .cluster_id = 0xFC10,
+        .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+        .dis_default_resp = 1,
+        .custom_cmd_id = a[2],
+        .data = {.type = ESP_ZB_ZCL_ATTR_TYPE_OCTET_STRING,
+                 .size = payload_len + 1, .value = wire},
+    };
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_zb_zcl_custom_cluster_cmd_req(&cmd);
+    esp_zb_lock_release();
+    send_ok();
+}
+
+static void hub_ping_modulus_nodes(void)
+{
+    for (unsigned i = 0; i < HUB_DEV_MAX; ++i) {
+        if (!s_devs[i].used || s_devs[i].device_id != 0xFFF0) continue;
+        /* A router that powers up after the coordinator may receive a fresh
+         * network address. Resolve the persisted IEEE address before every
+         * heartbeat instead of continuing to use the stale short address. */
+        esp_zb_ieee_addr_t ieee_lsb;
+        ieee_msb_to_lsb(s_devs[i].ieee_msb, ieee_lsb);
+        const uint16_t current_short = esp_zb_address_short_by_ieee(ieee_lsb);
+        if (current_short != 0xFFFF && current_short != 0xFFFE && current_short != 0) {
+            if (s_devs[i].short_addr != current_short) {
+                s_devs[i].short_addr = current_short;
+                dev_store_save();
+            }
+        }
+        esp_zb_zcl_custom_cluster_cmd_req_t cmd = {
+            .zcl_basic_cmd = {.dst_addr_u.addr_short = s_devs[i].short_addr,
+                              .dst_endpoint = 1, .src_endpoint = HUB_EP},
+            .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+            .profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+            .cluster_id = 0xFC10,
+            .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+            .dis_default_resp = 1,
+            .custom_cmd_id = 0x00,
+            .data = {.type = ESP_ZB_ZCL_ATTR_TYPE_NULL, .size = 0, .value = NULL},
+        };
+        esp_zb_lock_acquire(portMAX_DELAY);
+        esp_zb_zcl_custom_cluster_cmd_req(&cmd);
+        esp_zb_lock_release();
+        break;
+    }
+}
+
 void zigbee_hub_process_cmd(const uint8_t *payload, uint16_t len)
 {
     if (!payload || len < 2) {
@@ -1238,6 +1504,21 @@ void zigbee_hub_process_cmd(const uint8_t *payload, uint16_t len)
     const uint8_t cmd = payload[1];
     const uint8_t *args = payload + 2;
     const uint16_t args_len = len - 2;
+    /* OTA_DATA arrives thousands of times per image. Logging every block to the
+     * USB console throttles later updates after this image has booted. Keep the
+     * useful session/control diagnostics without putting console I/O in the
+     * transfer's hot path. */
+    if (cmd != ZIGBEE_CMD_OTA_DATA) {
+        ESP_LOGI(TAG, "UART cmd 0x%02x seq=%u args=%u", cmd,
+                 (unsigned)s_reply_seq, (unsigned)args_len);
+    }
+
+    uint8_t ota_reason = 0;
+    if (nano_ota_handle(cmd, args, args_len, &ota_reason)) {
+        if (ota_reason) send_fail(ota_reason); else send_ok();
+        s_reply_seq = 0;
+        return;
+    }
 
     switch (cmd) {
     case ZIGBEE_CMD_HUB_START:
@@ -1295,6 +1576,9 @@ void zigbee_hub_process_cmd(const uint8_t *payload, uint16_t len)
     case ZIGBEE_CMD_COLOR:
         hub_color(args, args_len);
         break;
+    case ZIGBEE_CMD_NODE_CONFIG:
+        hub_node_config(args, args_len);
+        break;
     case ZIGBEE_CMD_DISABLE:
         hub_permit_join(0);
         break;
@@ -1321,4 +1605,5 @@ void zigbee_hub_poll(void)
     }
     ticks = 0;
     hub_send_state();
+    hub_ping_modulus_nodes();
 }

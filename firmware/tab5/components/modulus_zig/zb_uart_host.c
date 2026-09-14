@@ -26,7 +26,7 @@ static const char *TAG = "zb_uart";
 #define LINK_RX_BUF         2048
 #define LINK_SUPERV_US      (70LL * 1000 * 1000)
 #define LINK_OFFLINE_US     (3LL * LINK_SUPERV_US)
-#define CMD_ACK_TIMEOUT_MS  250
+#define CMD_ACK_TIMEOUT_MS  1500
 #define CMD_MAX_RETRIES     3
 #define CMD_QUEUE_DEPTH     16
 
@@ -55,6 +55,7 @@ static volatile uint8_t  s_wait_seq;
 static volatile uint8_t  s_ack_seq;
 static volatile bool     s_ack_nak;
 static volatile uint8_t  s_ack_reason;
+static volatile bool     s_ota_mode;
 
 static uint8_t crc8(const uint8_t *p, uint16_t n)
 {
@@ -163,6 +164,10 @@ static bool enqueue_cmd(const uint8_t *cmd_payload, uint16_t len, bool wait_resu
         return false;
     }
 
+    if (s_ota_mode && !wait_result) {
+        return false;
+    }
+
     zb_cmd_job_t job = {};
     job.len = len;
     memcpy(job.payload, cmd_payload, len);
@@ -182,7 +187,10 @@ static bool enqueue_cmd(const uint8_t *cmd_payload, uint16_t len, bool wait_resu
         job.token = s_sync_token;
     }
 
-    if (xQueueSend(s_cmd_q, &job, pdMS_TO_TICKS(50)) != pdTRUE) {
+    const BaseType_t queued = wait_result
+        ? xQueueSendToFront(s_cmd_q, &job, pdMS_TO_TICKS(50))
+        : xQueueSendToBack(s_cmd_q, &job, pdMS_TO_TICKS(50));
+    if (queued != pdTRUE) {
         ESP_LOGW(TAG, "cmd queue full (drop 0x%02x)", cmd_payload[0]);
         if (wait_result) {
             s_sync_busy = false;
@@ -218,6 +226,11 @@ bool modulus_zb_uart_send_cmd_sync(const uint8_t *cmd_payload, uint16_t len)
     return enqueue_cmd(cmd_payload, len, true);
 }
 
+void modulus_zb_uart_set_ota_mode(bool enabled)
+{
+    s_ota_mode = enabled;
+}
+
 bool modulus_zb_uart_ready(void)
 {
     return s_inited && s_last_rx_us >= 0 &&
@@ -239,7 +252,13 @@ static void rx_task(void *arg)
     uint8_t chunk[64];
 
     for (;;) {
-        const int n = uart_read_bytes(LINK_UART, chunk, sizeof(chunk), pdMS_TO_TICKS(250));
+        int n = uart_read_bytes(LINK_UART, chunk, 1, portMAX_DELAY);
+        size_t waiting = 0;
+        if (n == 1 && uart_get_buffered_data_len(LINK_UART, &waiting) == ESP_OK && waiting) {
+            const size_t take = waiting < sizeof(chunk) - 1 ? waiting : sizeof(chunk) - 1;
+            const int extra = uart_read_bytes(LINK_UART, chunk + 1, take, 0);
+            if (extra > 0) n += extra;
+        }
         for (int i = 0; i < n; i++) {
             const uint8_t b = chunk[i];
             switch (st) {

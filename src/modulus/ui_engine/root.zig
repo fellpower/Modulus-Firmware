@@ -48,6 +48,7 @@ pub const m_panel_sd = @import("m_panel_sd.zig");
 pub const m_panel_zigbee = @import("m_panel_zigbee.zig");
 pub const m_panel_c6_ota = @import("m_panel_c6_ota.zig");
 pub const m_panel_s3_ota = @import("m_panel_s3_ota.zig");
+pub const m_panel_nano_ota = @import("m_panel_nano_ota.zig");
 pub const m_panel_tool = @import("m_panel_tool.zig");
 pub const sd_volume = @import("sd_volume.zig");
 pub const usb_volume = @import("usb_volume.zig");

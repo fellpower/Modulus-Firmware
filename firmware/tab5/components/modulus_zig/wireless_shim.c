@@ -724,6 +724,11 @@ void modulus_wireless_restore_settings(void)
     if (!s_ready) {
         return;
     }
+    /* Zigbee lives on the NanoH2 UART and must be restored even while the
+     * separate SDIO transport is still starting (or unavailable). */
+    if (modulus_nvs_get_u8("zigbee", 0) != 0) {
+        modulus_wireless_zigbee_enable();
+    }
     if (!wireless_transport_ready() && !wireless_ensure_wifi_stack_started()) {
         ESP_LOGW(TAG, "Skip NVS radio restore — SDIO transport down");
         return;
@@ -743,9 +748,6 @@ void modulus_wireless_restore_settings(void)
         if (espnow_on) {
             modulus_wireless_espnow_enable();
         }
-    }
-    if (modulus_nvs_get_u8("zigbee", 0) != 0) {
-        modulus_wireless_zigbee_enable();
     }
     if (modulus_nvs_get_u8("thread", 0) != 0 && modulus_wireless_thread_supported()) {
         modulus_wireless_thread_enable();
@@ -1637,7 +1639,6 @@ static void wireless_zigbee_stop_hub(void)
         (void)modulus_wireless_zb_leave();
     }
     s_zb_on = false;
-    modulus_nvs_set_u8("zigbee", 0);
 }
 
 void modulus_wireless_zigbee_disable(void)
@@ -1646,6 +1647,7 @@ void modulus_wireless_zigbee_disable(void)
      * auto-rejoin intent so it stays off across reboots. (Sleep uses
      * wireless_zigbee_stop_hub, which preserves zb_auto for wake.) */
     wireless_zigbee_stop_hub();
+    modulus_nvs_set_u8("zigbee", 0);
     modulus_nvs_set_u8("zb_auto", 0);
 }
 

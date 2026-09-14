@@ -1,4 +1,4 @@
-//! M-Panel C6 Update — guarded ESP-Hosted slave OTA from USB.
+//! M-Panel NanoH2 Update — guarded ESP-Hosted slave OTA from USB.
 
 const std = @import("std");
 const geom = @import("geom.zig");
@@ -21,7 +21,7 @@ pub const State = struct {
     file_count: u8 = 0,
     selected: u8 = 0,
     progress: u8 = 0,
-    c6_connected: bool = false,
+    nano_connected: bool = false,
     version: [24]u8 = .{0} ** 24,
     version_len: u8 = 0,
     image_version: [32]u8 = .{0} ** 32,
@@ -90,9 +90,9 @@ fn drawFittedText(logical: *fb.LogicalFb, x: i32, y: i32, max_w: i32, text: []co
 fn drawStatusCard(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, r: geom.Rect) void {
     widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container_low);
     const dot: geom.Rect = .{ .x = r.x + tokens.Space.lg, .y = r.y + 24, .w = 18, .h = 18 };
-    widgets.fillRoundRect(logical, dot, 9, if (state.c6_connected) theme.primary else theme.tertiary);
-    font.drawTextRole(logical, dot.x + 34, r.y + 16, "Internal C6 Controller", theme.on_surface, .title_m);
-    font.drawTextRole(logical, dot.x + 34, r.y + 51, if (state.c6_connected) "ESP-Hosted / SDIO connected" else "Internal C6 not connected", theme.on_surface_variant, .body_m);
+    widgets.fillRoundRect(logical, dot, 9, if (state.nano_connected) theme.primary else theme.tertiary);
+    font.drawTextRole(logical, dot.x + 34, r.y + 16, "NanoH2 Zigbee Coordinator", theme.on_surface, .title_m);
+    font.drawTextRole(logical, dot.x + 34, r.y + 51, if (state.nano_connected) "UART connected" else "NanoH2 not connected", theme.on_surface_variant, .body_m);
     if (state.version_len != 0) {
         var version: [48]u8 = undefined;
         const version_text = std.fmt.bufPrint(&version, "Firmware: {s}", .{state.versionText()}) catch "Firmware version unavailable";
@@ -125,7 +125,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     var lay: Layout = .{};
     lay.header = tool_chrome.headerChrome(card);
     tool_chrome.paintBackToPanel(logical, theme, lay.header.back);
-    tool_chrome.paintTitle(logical, theme, lay.header.back.x + lay.header.back.w + tokens.Space.sm, lay.header.back.y, "Internal C6 Controller");
+    tool_chrome.paintTitle(logical, theme, lay.header.back.x + lay.header.back.w + tokens.Space.sm, lay.header.back.y, "NanoH2");
     tool_chrome.paintExit(logical, theme, lay.header.exit);
 
     const x = card.x + tokens.Space.lg;
@@ -143,15 +143,15 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     widgets.drawTonalButton(logical, lay.detail_back, "<", theme);
     font.drawTextRole(logical, x + 84, y + 13, "Firmware Update", theme.on_surface, .title_m);
     y += 72;
-    const link = if (state.c6_connected) "ESP-Hosted/SDIO connected" else "Internal C6 not connected";
-    font.drawTextRole(logical, x, y, link, if (state.c6_connected) theme.primary else theme.on_error_container, .body_m);
+    const link = if (state.nano_connected) "UART connected" else "NanoH2 not connected";
+    font.drawTextRole(logical, x, y, link, if (state.nano_connected) theme.primary else theme.on_error_container, .body_m);
     if (state.version_len != 0) {
         var version: [48]u8 = undefined;
         const version_text = std.fmt.bufPrint(&version, "Firmware: {s}", .{state.versionText()}) catch "Firmware version unavailable";
         drawFittedText(logical, x + 330, y, 390, version_text, theme.primary, .body_m);
     }
     lay.refresh = .{ .x = right - 190, .y = y - 10, .w = 190, .h = 60 };
-    const locked = state.phase == .flashing or state.phase == .success;
+    const locked = state.phase == .flashing;
     if (locked) drawDisabled(logical, lay.refresh, "Refresh USB", theme) else widgets.drawTonalButton(logical, lay.refresh, "Refresh USB", theme);
     y += 34;
     var installed: [64]u8 = undefined;
@@ -178,7 +178,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
         drawFittedText(logical, r.x + tokens.Space.md, r.y + 13, r.w - tokens.Space.md * 2, state.fileText(i), if (selected) theme.on_secondary_container else theme.on_surface, .body_m);
         y += row_h + row_gap;
     }
-    if (lay.row_n == 0) font.drawTextRole(logical, x, y + 8, "No verified ESP32-C6 app images found on USB.", theme.on_surface_variant, .body_m);
+    if (lay.row_n == 0) font.drawTextRole(logical, x, y + 8, "No verified ESP32-NanoH2 app images found on USB.", theme.on_surface_variant, .body_m);
 
     const status_y = card.y + card.h - 150;
     drawFittedText(logical, x, status_y, right - x, state.statusText(), if (state.phase == .failed) theme.on_error_container else theme.on_surface_variant, .body_m);
@@ -196,7 +196,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     lay.flash = .{ .x = x + action_w + tokens.Space.md, .y = by, .w = action_w, .h = action_h };
     const can_check = state.file_count > 0 and !locked;
     if (can_check) widgets.drawFilledButton(logical, lay.check, "1. Check image", theme) else drawDisabled(logical, lay.check, "1. Check image", theme);
-    if (state.phase == .armed) widgets.drawDangerButton(logical, lay.flash, "2. Update Internal C6", theme) else drawDisabled(logical, lay.flash, "2. Update Internal C6", theme);
+    if (state.phase == .armed) widgets.drawDangerButton(logical, lay.flash, "2. Flash NanoH2", theme) else drawDisabled(logical, lay.flash, "2. Flash NanoH2", theme);
     return lay;
 }
 
@@ -214,7 +214,7 @@ pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
     return .{};
 }
 
-test "C6 OTA buttons meet minimum touch size" {
+test "NanoH2 OTA buttons meet minimum touch size" {
     const gpa = std.testing.allocator;
     var logical = try fb.LogicalFb.alloc(gpa);
     defer logical.deinit(gpa);
@@ -227,11 +227,11 @@ test "C6 OTA buttons meet minimum touch size" {
     try std.testing.expect(lay.rows[0].h >= tokens.Logical.touch_min);
 }
 
-test "C6 dashboard exposes one large firmware card" {
+test "NanoH2 dashboard exposes one large firmware card" {
     const gpa = std.testing.allocator;
     var logical = try fb.LogicalFb.alloc(gpa);
     defer logical.deinit(gpa);
-    const state: State = .{ .view = .dashboard, .c6_connected = true };
+    const state: State = .{ .view = .dashboard, .nano_connected = true };
     const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
     try std.testing.expect(lay.firmware.h >= tokens.Logical.touch_min);
     try std.testing.expectEqual(Hit.firmware, hit(lay, lay.firmware.x + 4, lay.firmware.y + 4).kind);

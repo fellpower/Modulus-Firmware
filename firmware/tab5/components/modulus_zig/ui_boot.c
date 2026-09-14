@@ -31,7 +31,7 @@ void modulus_ui_boot_arm_transition(void)
     if (s_boot_tmr) {
         return;
     }
-    s_boot_tmr = lv_timer_create(boot_timeout_cb, 3000, NULL);
+    s_boot_tmr = lv_timer_create(boot_timeout_cb, 5000, NULL);
     lv_timer_set_repeat_count(s_boot_tmr, 1);
 }
 
@@ -61,6 +61,12 @@ void modulus_ui_boot_create(void)
     lv_obj_set_style_text_font(title, MOD_UI_FONT_SPLASH, 0);
     lv_obj_set_style_text_letter_space(title, 3, 0);
     lv_obj_set_style_opa(title, LV_OPA_COVER, 0);
+
+    lv_obj_t *ota_credit = lv_label_create(col);
+    lv_label_set_text(ota_credit, "OTA VERSION BY FELLPOWER");
+    lv_obj_set_style_text_color(ota_credit, modulus_ui_color_primary(), 0);
+    lv_obj_set_style_text_font(ota_credit, MOD_UI_FONT_TITLE_M, 0);
+    lv_obj_set_style_text_letter_space(ota_credit, 1, 0);
 
     lv_obj_t *creator = lv_label_create(col);
     lv_label_set_text(creator, "Driven by M5Stack | Powered by Zig | Built on ESP-IDF");
