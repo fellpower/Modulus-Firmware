@@ -501,7 +501,7 @@ bool modulus_wireless_zb_hub_fw(void)
 
 bool modulus_wireless_zb_leave(void)
 {
-    uint8_t cmd[] = {ZIGBEE_CMD_DISABLE};
+    uint8_t cmd[] = {ZIGBEE_CMD_HUB_RESET};
     if (!modulus_zb_uart_send_cmd(cmd, sizeof(cmd))) {
         return false;
     }
@@ -560,6 +560,14 @@ bool modulus_wireless_zb_set_onoff(const modulus_zb_device_t *dev, bool on)
     ESP_LOGI(TAG, "Zigbee ZCL On/Off -> 0x%04x ep%u %s", dev->short_addr,
              (unsigned)cmd[3], on ? "ON" : "OFF");
     return true;
+}
+
+bool modulus_wireless_zb_node_set_output(uint16_t short_addr, uint8_t index, bool on)
+{
+    if (short_addr == 0 || index >= 12) return false;
+    uint8_t cmd[] = {ZIGBEE_CMD_ONOFF, (uint8_t)(short_addr >> 8),
+                     (uint8_t)short_addr, (uint8_t)(10 + index), on ? 1 : 0};
+    return modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
 }
 
 bool modulus_wireless_zb_set_level(const modulus_zb_device_t *dev, uint8_t level)

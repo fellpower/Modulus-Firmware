@@ -81,6 +81,18 @@ static void dev_store_load(void)
     nvs_close(h);
 }
 
+static void dev_store_clear(void)
+{
+    memset(s_devs, 0, sizeof(s_devs));
+    s_devs_loaded = true;
+    nvs_handle_t h;
+    if (nvs_open("zb_hub", NVS_READWRITE, &h) != ESP_OK) return;
+    (void)nvs_erase_key(h, "devices");
+    (void)nvs_erase_key(h, "dev_ver");
+    (void)nvs_commit(h);
+    nvs_close(h);
+}
+
 #define HUB_HEARTBEAT_TICKS 20 /* 20 * 100 ms = 2 s (was 5 s) */
 
 /* reportable_change blobs must outlive async ZCL config-report TX */
@@ -235,6 +247,14 @@ static void hub_bdb_commission(uint8_t mode)
     (void)esp_zb_bdb_start_top_level_commissioning(mode);
 }
 
+static bool hub_pan_valid(uint16_t pan)
+{
+    /* 0xFFFF is the Zigbee broadcast / "no PAN" sentinel.  ZBOSS can retain
+     * a non-factory-new flag after an interrupted erase while still returning
+     * this value.  Never expose that broken state to the P4 as joined. */
+    return pan != 0xFFFF;
+}
+
 static void hub_send_state(void)
 {
     uint8_t st[5];
@@ -246,7 +266,7 @@ static void hub_send_state(void)
         ch = esp_zb_get_current_channel();
         esp_zb_lock_release();
     }
-    st[0] = s_formed ? 1 : 0;
+    st[0] = (s_formed && hub_pan_valid(pan)) ? 1 : 0;
     st[1] = ch;
     st[2] = (uint8_t)(pan >> 8);
     st[3] = (uint8_t)pan;
@@ -707,10 +727,22 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                     hub_energy_scan(true);
                 }
             } else {
+                const uint16_t pan = esp_zb_get_pan_id();
+                if (!hub_pan_valid(pan)) {
+                    /* A persisted "joined" flag with PAN 0xFFFF cannot carry
+                     * devices or permit joins.  Clear only Zigbee storage and
+                     * reboot; the next start forms a fresh coordinator PAN. */
+                    s_formed = false;
+                    ESP_LOGE(TAG, "Invalid persisted Zigbee PAN 0xFFFF — factory reset");
+                    hub_send_state();
+                    dev_store_clear();
+                    esp_zb_factory_reset();
+                    break;
+                }
                 s_formed = true;
                 s_req_channel = esp_zb_get_current_channel();
                 ESP_LOGI(TAG, "Rebooted into existing network (pan 0x%04x ch %u)",
-                         esp_zb_get_pan_id(), (unsigned)s_req_channel);
+                         pan, (unsigned)s_req_channel);
                 hub_send_state();
             }
         } else {
@@ -1579,6 +1611,16 @@ void zigbee_hub_process_cmd(const uint8_t *payload, uint16_t len)
     case ZIGBEE_CMD_NODE_CONFIG:
         hub_node_config(args, args_len);
         break;
+    case ZIGBEE_CMD_HUB_RESET:
+        /* The NanoH2 is normally enclosed.  Let the Tab5 perform the same
+         * recovery as the physical 3-second button gesture. */
+        send_ok();
+        s_reply_seq = 0;
+        s_formed = false;
+        dev_store_clear();
+        vTaskDelay(pdMS_TO_TICKS(100)); /* allow the ACK to leave the UART */
+        esp_zb_factory_reset();
+        return;
     case ZIGBEE_CMD_DISABLE:
         hub_permit_join(0);
         break;

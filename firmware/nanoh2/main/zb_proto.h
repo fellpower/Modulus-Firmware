@@ -30,6 +30,7 @@
                                          * mode 0: a=color temp (mireds), b=trans ds
                                          * mode 1: a=hue 0-254, b=saturation 0-254 */
 #define ZIGBEE_CMD_NODE_CONFIG     0x21 /* [short:2BE][node_cmd][payload...] */
+#define ZIGBEE_CMD_HUB_RESET       0x22 /* erase coordinator network and reboot */
 #define ZIGBEE_CMD_OTA_BEGIN       0x30 /* [image_size:4BE] */
 #define ZIGBEE_CMD_OTA_DATA        0x31 /* [offset:4BE][crc32:4BE][data...] */
 #define ZIGBEE_CMD_OTA_END         0x32 /* validate and select the new slot */
