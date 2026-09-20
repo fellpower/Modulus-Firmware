@@ -66,6 +66,7 @@ bool modulus_wireless_zb_node_set_channel(uint16_t short_addr, uint8_t index,
                                          uint8_t type, int8_t gpio, uint8_t flags,
                                          const char *name);
 bool modulus_wireless_zb_node_set_poll(uint16_t short_addr, uint8_t index, uint16_t seconds);
+bool modulus_wireless_zb_node_set_output(uint16_t short_addr, uint8_t index, bool on);
 bool modulus_wireless_zb_node_apply(uint16_t short_addr);
 bool modulus_wireless_zb_node_set_status_led(uint16_t short_addr, int8_t gpio, uint8_t flags);
 /* Color Control (0x0300): mode 0 = CCT (a=mireds, b=trans ds), mode 1 = hue/sat. */

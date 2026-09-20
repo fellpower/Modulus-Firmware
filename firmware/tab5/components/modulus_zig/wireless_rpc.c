@@ -583,6 +583,14 @@ bool modulus_wireless_zb_set_level(const modulus_zb_device_t *dev, uint8_t level
     return true;
 }
 
+bool modulus_wireless_zb_node_set_output(uint16_t short_addr, uint8_t index, bool on)
+{
+    if (short_addr == 0 || index >= 12) return false;
+    uint8_t cmd[] = {ZIGBEE_CMD_ONOFF, (uint8_t)(short_addr >> 8),
+                     (uint8_t)short_addr, (uint8_t)(10 + index), on ? 1 : 0};
+    return modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
+}
+
 bool modulus_wireless_zb_cover(const modulus_zb_device_t *dev, uint8_t op)
 {
     if (!dev || dev->short_addr == 0 || op > 2) {
