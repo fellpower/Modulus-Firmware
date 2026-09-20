@@ -2,16 +2,70 @@
   <img src="assets/modulus-firmware-hero.png" alt="Modulus Firmware — Tab5 CNC pendant" width="720">
 </p>
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=mvP2etHl_e0">
+    <img src="https://img.youtube.com/vi/mvP2etHl_e0/maxresdefault.jpg" alt="Watch the Modulus project video on YouTube" width="720">
+  </a>
+</p>
+
+<p align="center"><strong><a href="https://www.youtube.com/watch?v=mvP2etHl_e0">Watch the Modulus project video</a></strong></p>
+
+<p align="center">
+  <strong>English</strong> · <a href="README.de.md">Deutsch</a>
+</p>
+
 # Modulus Firmware
 
-**Version:** 3.1.0  
+**Version:** 3.1.5-ota<br>
 **Author:** D. McLean / BufferRoot  
 **Platform:** M5Stack Tab5 (ESP32-P4 + ESP32-C6)  
 **Stack:** Zig 0.16 + ESP-IDF 6  
 **Hackster:** [Modulus pendant](https://www.hackster.io/BufferRoot/modulus-the-ultimate-universal-smart-cnc-pendant-2587ed) · [M5Stack GIC 2026](https://m5stack.com/global-innovation-contest-2026)  
 **License:** [MIT](LICENSE)
 
+**Thanks:** Special thanks to **Sae** and **Miklos** for repeatedly testing the
+Tab5 ↔ S3 radio link and providing the diagnostics that led to the fixed-channel design.
+
 **One Device, One Software. Real control for any machine — no lag, no brand lock-in, no compromise.**
+
+## Why this OTA feature branch exists
+
+Modulus runs across multiple processors, but the Tab5's ESP32-C6 radio and the
+cabinet ESP32-S3 bridge traditionally required separate USB/bootloader access.
+This branch adds guarded **C6 Update** and **S3 Update** pages to M Panel. C6
+application images travel over the internal ESP-Hosted/SDIO link; S3
+application images travel over ESP-NOW. Both updater pages read the root of a
+FAT-formatted USB-A drive and reject images built for the wrong chip. microSD
+support was useful during development, but was removed from the updater UI
+because the slot is inaccessible in many installed enclosures and presenting
+two maintenance sources made the workflow unnecessarily ambiguous. Other
+Modulus microSD features are unchanged.
+
+The maintenance sequence is **P4 first, then C6 and/or S3**: install the P4
+firmware containing the OTA UI, boot Modulus normally, and select the matching
+updater. The XIAO ESP32-S3 needs the OTA-capable full image once over USB; later
+updates use only its application image. Image inspection, explicit arming,
+progress feedback, and a guarded restart keep every write deliberate. After a
+successful C6 activation, the P4 restarts automatically after a short delay to
+resynchronize the ESP-Hosted/SDIO link.
+Nothing is flashed automatically.
+
+The complete C6 and XIAO S3 OTA paths, including an S3 update from USB-A and a
+successful boot from its second OTA slot, have been verified on real hardware.
+
+> [!IMPORTANT]
+> **OTA must be enabled by a one-time wired flash first.** Flash the P4 package
+> over USB so the Tab5 has the OTA menus. A new or previously installed XIAO
+> ESP32-S3 must then be flashed once over USB at offset `0x0` with
+> `modulus-s3-xiao-full.bin` from the latest release. This installs the OTA receiver
+> and dual-slot partition table. Only after that first flash can subsequent S3
+> updates use `modulus-s3-xiao-ota.bin` through **M Panel → S3 Update**.
+> Do not send the first-flash/full image through the OTA menu.
+
+For the Tab5 C6, the stock ESP-Hosted firmware already provides slave OTA. The
+P4 OTA-enabled firmware still has to be installed first before **C6 Update** is
+available. If the C6 no longer boots or answers over SDIO, restore its complete
+flash package over the C6 USB bootloader before using OTA again.
 
 Handheld DRO + MPG **client** on Tab5 — Zig dual-core anti-lag firmware talking to grblHAL (and other engines) over ESP-NOW or RS-485. It does not replace your motion controller.
 
@@ -20,6 +74,13 @@ Most M5 projects cram UI and radio onto one busy chip. Modulus uses Tab5 as desi
 ---
 
 ## Four-firmware architecture
+
+The following overview shows the wired buses, radio links, power connection,
+and the GPIO assignments currently used by the Tab5, NanoH2, S3 bridge, and
+external Zigbee node. The ULN2803A relay connection is planned and still awaits
+the hardware test.
+
+![Modulus connection and pin overview](assets/modulus-connection-pin-overview.png)
 
 ```
                  [Operator touch UI + MPG wheel]
@@ -123,7 +184,7 @@ Most M5 projects cram UI and radio onto one busy chip. Modulus uses Tab5 as desi
 
 Pendant E-Stop is a **convenience layer**, not a safety-rated cutoff. It rides the active link (GPIO16 NO → feed-hold `!` then soft reset). **If the wireless link is down, pendant E-Stop will not stop the machine.** Machine mushroom E-Stop is primary. Software: `envelope.zig` soft limits, zero-while-running confirm, link-offline warnings, low-battery MPG lockout.
 
-**Out of scope (roadmap):** SC2356 camera UI · on-screen FFT · OTA dual-partition · PCNT GPIO quadrature (replace I²C ExtEncoder).
+**Out of scope (roadmap):** SC2356 camera UI · on-screen FFT  · PCNT GPIO quadrature (replace I²C ExtEncoder).
 
 ---
 
@@ -145,98 +206,40 @@ LICENSE              MIT
 
 ---
 
-## Prebuilt flash images
+## Install and update
 
-Download **v3.1.0** assets (bootloader + partition table + app per target):
+Download the firmware from the [latest GitHub release](https://github.com/fellpower/Modulus-Firmware/releases/latest).
+The Releases tab always contains the current installation files and checksums.
 
-**https://github.com/BufferRoot/Modulus-Firmware/releases/tag/v3.1.0**
+### Full images and app images
 
-| Zip | Chip | What it is | Typical port |
-|-----|------|------------|--------------|
-| `modulus-tab5-p4-v3.1.0.zip` | ESP32-P4 | Pendant UI + control (Zig UI Engine) | COM5 (Tab5 USB) |
-| `modulus-tab5-c6-v3.1.0.zip` | ESP32-C6 | ESP-Hosted / ESP-NOW radio | COM6 (C6 USB; hold **BOOT** if needed) |
-| `modulus-nanoh2-v3.1.0.zip` | ESP32-H2 | Zigbee shop hub | NanoH2 USB-C (hold **BUTTON**) |
-| `modulus-s3-bridge-v3.1.0.zip` | ESP32-S3 | Cabinet ESP-NOW → UART | COM8 (bridge board) |
-| `SHA256SUMS.txt` | — | Checksums for every `.bin` | — |
+- A **full image** contains everything required for a clean wired installation
+  and clears old settings. Flash it at address `0x0`.
+- Select `modulus-tab5-full.bin` for Tab5.
+- Select `modulus-s3-generic-full.bin` or `modulus-s3-xiao-full.bin` for the
+  matching S3 board.
+- An S3 **OTA image** is used for subsequent updates from the Tab5 S3 update menu.
 
-### What you need
+### Initial installation
 
-1. [esptool](https://docs.espressif.com/projects/esptool/) (`pip install esptool`) **or** ESP-IDF 6 `idf.py` / `python -m esptool`
-2. USB cables + drivers for each chip
-3. Unzip each package into its own folder (commands below assume you `cd` into that folder)
-
-**Flash order (first bring-up):** C6 → P4 → S3 bridge → NanoH2 (optional). Power-cycle the Tab5 after C6+P4. Keep the machine E-Stop in reach.
-
-COM ports on your PC may differ — change `-p COMx` to match Device Manager.
-
-### 1. Tab5 C6 (wireless slave)
-
-Unzip `modulus-tab5-c6-v3.1.0.zip`, then:
+Connect the target through its normal USB port and write the matching single
+full BIN at address `0x0`. This installs the complete bootloader, partition table,
+and application. Example for a XIAO S3:
 
 ```powershell
-cd path\to\tab5-c6
-esptool.py --chip esp32c6 -p COM6 --before default-reset --after hard-reset write_flash `
-  --flash-mode dio --flash-freq 80m --flash-size 4MB `
-  0x0 bootloader.bin `
-  0x8000 partition-table.bin `
-  0xd000 ota_data_initial.bin `
-  0x10000 network_adapter.bin
+python -m esptool --chip esp32s3 -p COM8 erase-flash
+python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-s3-xiao-full.bin
 ```
 
-If the port never appears: hold **BOOT** on the C6 while plugging USB, then run the command.
+Replace COM8 with the actual port. Use the generic full image for a generic S3.
+See `FLASH-README.md` in the release for the complete Tab5 and S3 commands.
 
-### 2. Tab5 P4 (main pendant)
+### Later XIAO S3 updates
 
-Unzip `modulus-tab5-p4-v3.1.0.zip`, then:
-
-```powershell
-cd path\to\tab5-p4
-esptool.py --chip esp32p4 -p COM5 --before default-reset --after hard-reset write_flash `
-  --flash-mode dio --flash-freq 40m --flash-size 16MB `
-  0x2000 bootloader.bin `
-  0x8000 partition-table.bin `
-  0x10000 modulus_tab5.bin
-```
-
-Power-cycle the Tab5. Cold boot should show wireless / SDIO ready (not `0x107`).
-
-### 3. ESP32-S3 bridge (cabinet)
-
-Unzip `modulus-s3-bridge-v3.1.0.zip`, then:
-
-```powershell
-cd path\to\s3-bridge
-esptool.py --chip esp32s3 -p COM8 --before default-reset --after hard-reset write_flash `
-  --flash-mode dio --flash-freq 80m --flash-size 8MB `
-  0x0 bootloader.bin `
-  0x8000 partition-table.bin `
-  0x10000 s3_espnow_uart_bridge.bin
-```
-
-Wire S3 UART to your CNC (grblHAL) serial. On the Tab5: **Settings → Wireless → ESP-NOW → enter S3 MAC**, lock channel **1 / 6 / 11**.
-
-### 4. NanoH2 (Zigbee hub, optional)
-
-Enable **EXT5V** for Grove/H2 power. Unzip `modulus-nanoh2-v3.1.0.zip`, hold **BUTTON** on the Stamp, then:
-
-```powershell
-cd path\to\nanoh2
-esptool.py --chip esp32h2 -p COM7 --before default-reset --after hard-reset write_flash `
-  --flash-mode dio --flash-freq 48m --flash-size 4MB `
-  0x0 bootloader.bin `
-  0x8000 partition-table.bin `
-  0x10000 modulus_nanoh2.bin
-```
-
-UART to Tab5 is GPIO6 TX / GPIO7 RX @ 460800. **Never** flash C6 with Zigbee-exclusive builds — Zigbee stays on NanoH2.
-
-### Verify
-
-- Compare downloaded `.bin` hashes to `SHA256SUMS.txt`
-- After P4+C6: idle dashboard ≥ ~55 s with no IDLE0 WDT
-- ESP-NOW path: status shows **Connected** once S3 MAC/channel are set
-
-Each zip also includes `FLASH.md` with the same offsets.
+Copy the matching `modulus-s3-*-ota.bin` from the latest release to the USB stick root. Open
+**M Panel → S3 → Firmware Update**, then **Refresh USB → Check S3 image → Flash S3**.
+After successful verification select **Restart S3**. Set matching S3 MAC/channel
+under Settings → Wireless if required.
 
 ---
 
@@ -254,7 +257,7 @@ zig build tab5-lib    # freestanding Zig library
 | Target | Command |
 |--------|---------|
 | Tab5 P4 | `.\scripts\build_tab5.ps1` then `.\scripts\flash_tab5.ps1 -Port COM5` |
-| Tab5 C6 + P4 | `.\scripts\flash_tab5_dual.ps1 -C6Port COM6 -P4Port COM5` *(never `-ZigbeeExclusive`)* |
+| Tab5 C6 | Build with `scripts/build_tab5_c6_modulus.ps1`, then install the app via the Tab5 C6 update menu |
 | NanoH2 | `idf.py -C firmware/nanoh2 flash` (hold BUTTON; enable EXT5V) |
 | S3 bridge | `.\scripts\build_s3_bridge.ps1 -Action flash -Port COM8` |
 | S3 XIAO | same image: USB shell `board xiao` (or factory ` -Board xiao`) then flash |
@@ -277,7 +280,7 @@ zig build tab5-lib    # freestanding Zig library
 > newer IDF than 6.0.1 and the build breaks
 > ([#2](https://github.com/BufferRoot/Modulus-Firmware/issues/2)).
 
-Re-pack local builds into release zips: `.\scripts\package_flash_images.ps1`.
+Host regression test for C6 OTA: `python scripts/test_c6_ota.py` (requires Zig).
 
 ### Pinout (Tab5)
 
