@@ -35,72 +35,31 @@ an der Hardware getestet.
 
 ## Erstinstallation
 
-Die fertigen Dateien stehen im [Release v3.1.3-ota](https://github.com/fellpower/Modulus-Firmware-C6-OTA/releases/tag/v3.1.3-ota).
+Die aktuellen Dateien stehen immer im [neuesten GitHub-Release](https://github.com/fellpower/Modulus-Firmware/releases/latest).
+Der Reiter **Releases** enthält die Installationsdateien, Anleitung und Prüfsummen.
 
-- Das **Full-Image** enthält alles für die einmalige Erstinstallation und wird
-  bei Adresse `0x0` geschrieben. Full-Images gibt es für P4 und XIAO S3.
-- Das **App-Image** ist für spätere Aktualisierungen über die OTA-Menüs gedacht.
-- Für den **C6 gibt es genau eine Release-Datei**:
-  `modulus-tab5-c6-app-v3.1.3-ota.bin`. Sie wird immer über das C6-Menü des
-  Tab5 installiert, auch beim Wechsel von der Factory-Version 1.4.1.
-- Den C6 anschließend direkt über das Tab5 aktualisieren, wie unten beschrieben.
-
-Das aktuelle P4-Full-Image enthält den getesteten Kompatibilitätsweg für einen
-C6 mit der Factory-Version ESP-Hosted 1.4.1. Der Wechsel von 1.4.1 zur
-Modulus-C6-Firmware wurde auf dem Tab5 erfolgreich getestet.
+- Das **Full-Image** enthält alles für eine saubere Installation, löscht alte
+  Einstellungen und wird bei Adresse `0x0` geschrieben.
+- Für den Tab5 wird `modulus-tab5-full.bin` verwendet.
+- Für den S3 wird passend zum Board `modulus-s3-generic-full.bin` oder
+  `modulus-s3-xiao-full.bin` verwendet.
+- Die S3-**OTA-Images** sind für spätere Aktualisierungen über das S3-Menü gedacht.
 
 Das Ziel über seinen normalen USB-Anschluss verbinden und die passende einzelne
 Full-BIN an Adresse `0x0` schreiben. Beispiel für den XIAO (`COM8` durch seinen
 tatsächlichen Port ersetzen):
 
 ```powershell
-python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-xiao-s3-full-v3.1.3-ota.bin
+python -m esptool --chip esp32s3 -p COM8 erase-flash
+python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-s3-xiao-full.bin
 ```
 
-NanoH2 und generische S3-Bridge haben eigene Pakete mit `FLASH.md`.
-
-## C6 über das Tab5 aktualisieren
-
-Für diesen Weg brauchst du einen FAT32-USB-Stick. Der C6 wird vollständig aus
-Modulus aktualisiert; dieses Release beschreibt keinen separaten C6-Flashweg.
-
-1. Tab5 mit aktuellem P4-Build starten.
-2. `modulus-tab5-c6-app-v3.1.3-ota.bin` ins **Hauptverzeichnis** des FAT32-Sticks kopieren.
-   Im Gesamt-ZIP liegt diese Datei im Ordner `ota/`.
-3. Stick in Tab5 USB-A stecken.
-4. **M Panel → C6 → Firmware Update** öffnen.
-5. **Refresh USB** drücken, Datei auswählen, **Check image** drücken.
-6. **Flash C6** drücken und bestätigen.
-7. Stromversorgung und Stick angeschlossen lassen, bis das Update und der automatische P4-Neustart beendet sind.
-8. C6-Version und ESP-NOW-Verbindung kontrollieren.
-
-Die P4-Firmware fragt die **laufende C6-Version** ab und wählt automatisch den
-passenden Ablauf. Bei alten Versionen wie 1.4.1 werden kleinere Blöcke verwendet;
-der P4 startet nach acht Sekunden neu. Ab ESP-Hosted 2.6.0 wird explizit aktiviert,
-danach startet der P4 nach drei Sekunden. Eine manuelle Moduswahl ist nicht nötig.
-
-Das gilt bei funktionierender ESP-Hosted-Verbindung und geeigneter OTA-Partition.
-Eine pauschale Garantie für jede fremde oder zukünftige C6-Firmware gibt es nicht.
-Bei nicht lesbarer Version beginnt kein Schreibvorgang.
-
-**Nur die C6-App-BIN gehört ins OTA-Menü.** Keine Full-BIN und kein ZIP
-auswählen. microSD ist keine OTA-Quelle.
-
-## Warum zwei Versionsnummern angezeigt werden
-
-| Anzeige | Bedeutung |
-|---------|-----------|
-| **Modulus release: v3.1.3-ota** | Installiertes Modulus-Release |
-| **ESP-Hosted (C6): 2.11.4** | Vom Funkprozessor gemeldete ESP-Hosted-Version |
-
-Die Datei `modulus-tab5-c6-app-v3.1.3-ota.bin` gehört zum Modulus-Release
-v3.1.3-ota und meldet trotzdem korrekt ESP-Hosted **2.11.4**.
-Der C6 meldet seine ESP-Hosted-Komponentenversion separat. Gleiche
-ESP-Hosted-Versionen beweisen nicht, dass zwei Firmwaredateien denselben Build enthalten.
+Für einen generischen S3 das Generic-Full-Image verwenden. Die vollständigen
+Tab5- und S3-Befehle stehen in `FLASH-README.md` im Release.
 
 ## Spätere S3-Updates
 
-`modulus-xiao-s3-app-v3.1.3-ota.bin` ins Hauptverzeichnis des Sticks kopieren.
+Das passende `modulus-s3-*-ota.bin` aus dem neuesten Release ins Hauptverzeichnis des Sticks kopieren.
 **M Panel → S3 → Firmware Update → Refresh USB → Check S3 image → Flash S3**.
 Nach erfolgreicher Prüfung **Restart S3** drücken. Bei Bedarf S3-MAC und
 passenden Funkkanal unter Settings → Wireless eintragen.
