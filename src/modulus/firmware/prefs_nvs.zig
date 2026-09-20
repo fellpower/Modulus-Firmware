@@ -241,6 +241,16 @@ pub fn loadPrefs(p: *settings_prefs.Prefs) void {
     // NVS en_chan is 0-based; prefs use 1..13.
     p.wireless.en_chan = getU8(keys.en_chan, p.wireless.en_chan -| 1) + 1;
     p.wireless.en_rate = getU8(keys.en_rate, p.wireless.en_rate);
+    for (p.wireless.zb_node_channels[0..8], 0..) |*ch, i| {
+        var key: [16]u8 = undefined;
+        ch.icon = getU8(std.fmt.bufPrint(&key, "zbc{d}_icon", .{i}) catch continue, ch.icon);
+        ch.favorite = @min(getU8(std.fmt.bufPrint(&key, "zbc{d}_fav", .{i}) catch continue, ch.favorite), 3);
+        ch.start_mode = @min(getU8(std.fmt.bufPrint(&key, "zbc{d}_start", .{i}) catch continue, ch.start_mode), 2);
+        ch.temp_alarm_enabled = getU8(std.fmt.bufPrint(&key, "zbc{d}_alen", .{i}) catch continue, @intFromBool(ch.temp_alarm_enabled)) != 0;
+        ch.temp_alarm_high_centi_c = @bitCast(getU16(std.fmt.bufPrint(&key, "zbc{d}_ahi", .{i}) catch continue, @bitCast(ch.temp_alarm_high_centi_c)));
+        ch.temp_alarm_low_centi_c = @bitCast(getU16(std.fmt.bufPrint(&key, "zbc{d}_alo", .{i}) catch continue, @bitCast(ch.temp_alarm_low_centi_c)));
+        ch.temp_alarm_hysteresis_centi_c = getU16(std.fmt.bufPrint(&key, "zbc{d}_ahys", .{i}) catch continue, ch.temp_alarm_hysteresis_centi_c);
+    }
 
     p.audio.tone_prof = getU8(keys.tone_prof, p.audio.tone_prof);
     p.audio.tsound = getU8(keys.tsound, @intFromBool(p.audio.tsound)) != 0;
@@ -465,6 +475,16 @@ pub fn savePrefs(p: *const settings_prefs.Prefs) void {
     setU8(keys.wf_dhcp, @intFromBool(p.wireless.wf_dhcp));
     setU8(keys.en_chan, p.wireless.en_chan -| 1);
     setU8(keys.en_rate, p.wireless.en_rate);
+    for (p.wireless.zb_node_channels[0..8], 0..) |ch, i| {
+        var key: [16]u8 = undefined;
+        setU8(std.fmt.bufPrint(&key, "zbc{d}_icon", .{i}) catch continue, ch.icon);
+        setU8(std.fmt.bufPrint(&key, "zbc{d}_fav", .{i}) catch continue, ch.favorite);
+        setU8(std.fmt.bufPrint(&key, "zbc{d}_start", .{i}) catch continue, ch.start_mode);
+        setU8(std.fmt.bufPrint(&key, "zbc{d}_alen", .{i}) catch continue, @intFromBool(ch.temp_alarm_enabled));
+        setU16(std.fmt.bufPrint(&key, "zbc{d}_ahi", .{i}) catch continue, @bitCast(ch.temp_alarm_high_centi_c));
+        setU16(std.fmt.bufPrint(&key, "zbc{d}_alo", .{i}) catch continue, @bitCast(ch.temp_alarm_low_centi_c));
+        setU16(std.fmt.bufPrint(&key, "zbc{d}_ahys", .{i}) catch continue, ch.temp_alarm_hysteresis_centi_c);
+    }
 
     setU8(keys.tone_prof, p.audio.tone_prof);
     setU8(keys.tsound, @intFromBool(p.audio.tsound));

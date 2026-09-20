@@ -36,6 +36,9 @@ const m_panel_usb = @import("m_panel_usb.zig");
 const m_panel_probe = @import("m_panel_probe.zig");
 const m_panel_sd = @import("m_panel_sd.zig");
 const m_panel_zigbee = @import("m_panel_zigbee.zig");
+const m_panel_zigbee_add = @import("m_panel_zigbee_add.zig");
+const m_panel_controls = @import("m_panel_controls.zig");
+const m_panel_update_hub = @import("m_panel_update_hub.zig");
 const m_panel_c6_ota = @import("m_panel_c6_ota.zig");
 const m_panel_nano_ota = @import("m_panel_nano_ota.zig");
 const m_panel_s3_ota = @import("m_panel_s3_ota.zig");
@@ -301,6 +304,7 @@ pub const Engine = struct {
     cnc_rename_slot: u8 = 0,
     zb_rename_idx: u8 = 0,
     zb_node_channel_idx: u8 = 0,
+    zb_temp_alarm_idx: u8 = 0xff,
     cnc_overlay_fx: spring.Spring = spring.Spring.effects(0),
     dash_overlay: settings_dashboard_modals.Kind = .none,
     dash_wcs_layout: settings_dashboard_modals.WcsLayout = .{},
@@ -382,12 +386,20 @@ pub const Engine = struct {
     m_panel_sd_import_path: [sd_volume.path_len]u8 = .{0} ** sd_volume.path_len,
     m_panel_sd_footer_overflow_seen: bool = false,
     m_panel_zb_layout: m_panel_zigbee.Layout = .{},
+    m_panel_zb_add_layout: m_panel_zigbee_add.Layout = .{},
+    m_panel_zb_add_state: m_panel_zigbee_add.State = .{},
+    m_panel_zb_add_open: bool = false,
+    m_panel_controls_layout: m_panel_controls.Layout = .{},
+    m_panel_controls_page: u8 = 0,
+    /// 0..2 while choosing a quick-control slot, 0xff in normal control mode.
+    m_panel_quick_slot: u8 = 0xff,
     m_panel_zb_scroll: i32 = 0,
     m_panel_zb_level_drag: bool = false,
     m_panel_zb_menu_dev: u8 = 0xff,
     m_panel_zb_menu_field: u8 = 0,
     m_panel_zb_menu_rect: geom.Rect = .{},
     m_panel_zb_menu_scroll: usize = 0,
+    m_panel_update_hub_layout: m_panel_update_hub.Layout = .{},
     m_panel_c6_ota_layout: m_panel_c6_ota.Layout = .{},
     m_panel_c6_ota_state: m_panel_c6_ota.State = .{},
     m_panel_s3_ota_layout: m_panel_s3_ota.Layout = .{},
@@ -702,19 +714,24 @@ pub const Engine = struct {
                     self.m_panel_sd_footer_overflow_seen = false;
                 }
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.zigbee)) {
-                self.m_panel_zb_layout = m_panel_zigbee.paint(
-                    &self.logical,
-                    self.theme,
-                    .{
-                        .wireless = &self.prefs.wireless,
-                        .scroll_px = self.m_panel_zb_scroll,
-                        .anim_t = @as(f32, @floatFromInt(self.frame_n % 120)) / 120.0,
-                        .menu_dev = self.m_panel_zb_menu_dev,
-                        .menu_field = @enumFromInt(self.m_panel_zb_menu_field),
-                    },
-                    self.m_panel_fx.value,
-                );
-                if (self.m_panel_zb_menu_dev != 0xff) {
+                if (self.m_panel_zb_add_open) {
+                    self.driveZbAddWizard();
+                    self.m_panel_zb_add_layout = m_panel_zigbee_add.paint(&self.logical, self.theme, self.m_panel_zb_add_state, self.prefs.wireless.zigbee, self.prefs.wireless.zb_joined, self.prefs.wireless.live_zb_n, self.m_panel_fx.value);
+                } else {
+                    self.m_panel_zb_layout = m_panel_zigbee.paint(
+                        &self.logical,
+                        self.theme,
+                        .{
+                            .wireless = &self.prefs.wireless,
+                            .scroll_px = self.m_panel_zb_scroll,
+                            .anim_t = @as(f32, @floatFromInt(self.frame_n % 120)) / 120.0,
+                            .menu_dev = self.m_panel_zb_menu_dev,
+                            .menu_field = @enumFromInt(self.m_panel_zb_menu_field),
+                        },
+                        self.m_panel_fx.value,
+                    );
+                }
+                if (!self.m_panel_zb_add_open and self.m_panel_zb_menu_dev != 0xff) {
                     const field: zb_exposes.Field = @enumFromInt(self.m_panel_zb_menu_field);
                     const snap = self.prefs.wireless.zbSnap(self.m_panel_zb_menu_dev);
                     const sel: usize = switch (field) {
@@ -732,6 +749,22 @@ pub const Engine = struct {
                         self.m_panel_zb_menu_scroll,
                     );
                 }
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.controls)) {
+                self.m_panel_controls_layout = m_panel_controls.paint(&self.logical, self.theme, &self.prefs.wireless.zb_node_channels, self.prefs.wireless.zb_node_channel_count, self.m_panel_controls_page, self.m_panel_quick_slot, self.m_panel_fx.value);
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.firmware_update)) {
+                self.m_panel_update_hub_layout = m_panel_update_hub.paint(
+                    &self.logical,
+                    self.theme,
+                    self.m_panel_c6_ota_state.c6_connected,
+                    self.m_panel_s3_ota_state.s3_connected,
+                    self.m_panel_nano_ota_state.nano_connected,
+                    self.prefs.wireless.zb_node_ready,
+                    self.m_panel_c6_ota_state.versionText(),
+                    self.m_panel_s3_ota_state.versionText(),
+                    self.m_panel_nano_ota_state.versionText(),
+                    self.prefs.storage.usb_host,
+                    self.m_panel_fx.value,
+                );
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.c6_update)) {
                 self.m_panel_c6_ota_layout = m_panel_c6_ota.paint(
                     &self.logical,
@@ -768,6 +801,10 @@ pub const Engine = struct {
                 self.m_panel_scroll,
                 self.m_panel_fx.value,
                 self.prefs.storage.usb_host,
+                &self.prefs.wireless.zb_node_channels,
+                self.prefs.wireless.zb_node_channel_count,
+                self.prefs.cnc.session_up or self.m_panel_s3_ota_state.s3_connected,
+                self.prefs.wireless.live_zb_n,
             );
         }
 
@@ -3860,6 +3897,15 @@ pub const Engine = struct {
                 if (txt.len == 0) { self.showSnackbarError("Name required"); return; }
                 _ = self.emitWireless(.{ .zb_node_name = txt });
             },
+            .wl_zb_node_channel_name => {
+                const i = self.zb_node_channel_idx;
+                if (i < self.prefs.wireless.zb_node_channels.len and txt.len != 0) {
+                    const ch = &self.prefs.wireless.zb_node_channels[i];
+                    @memset(&ch.name, 0);
+                    @memcpy(ch.name[0..@min(txt.len, ch.name.len - 1)], txt[0..@min(txt.len, ch.name.len - 1)]);
+                    _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                }
+            },
             .wl_zb_node_poll => {
                 const seconds = std.fmt.parseInt(u16, txt, 10) catch 0;
                 if (seconds < 15 or seconds > 3600) { self.showSnackbarError("Poll interval: 15-3600 seconds"); return; }
@@ -3867,6 +3913,25 @@ pub const Engine = struct {
                 if (i < self.prefs.wireless.zb_node_channels.len) {
                     self.prefs.wireless.zb_node_channels[i].poll_interval_s = seconds;
                     _ = self.emitWireless(.{ .zb_node_poll = .{ .index=i, .seconds=seconds } });
+                }
+            },
+            .wl_zb_node_alarm_high, .wl_zb_node_alarm_low, .wl_zb_node_alarm_hysteresis => {
+                const degrees = std.fmt.parseInt(i16, txt, 10) catch {
+                    self.showSnackbarError("Enter whole degrees Celsius");
+                    return;
+                };
+                const i = self.zb_node_channel_idx;
+                if (i >= self.prefs.wireless.zb_node_channels.len) return;
+                const ch = &self.prefs.wireless.zb_node_channels[i];
+                switch (self.pad.target) {
+                    .wl_zb_node_alarm_high => ch.temp_alarm_high_centi_c = std.math.clamp(degrees, -55, 150) * 100,
+                    .wl_zb_node_alarm_low => ch.temp_alarm_low_centi_c = std.math.clamp(degrees, -55, 150) * 100,
+                    .wl_zb_node_alarm_hysteresis => ch.temp_alarm_hysteresis_centi_c = @intCast(std.math.clamp(degrees, 0, 20) * 100),
+                    else => unreachable,
+                }
+                if (ch.temp_alarm_low_centi_c >= ch.temp_alarm_high_centi_c) {
+                    self.showSnackbarError("Low alarm must be below high alarm");
+                    return;
                 }
             },
             .wl_zb_node_gpio => if (txt.len == 0) {
@@ -5443,6 +5508,7 @@ pub const Engine = struct {
         self.m_panel_term_scroll = 0;
         self.m_panel_usb_scroll = 0;
         self.m_panel_sd_scroll = 0;
+        self.m_panel_quick_slot = 0xff;
         self.m_panel_zb_scroll = 0;
         self.m_panel_zb_level_drag = false;
         self.m_panel_sd_import_len = 0;
@@ -5748,6 +5814,11 @@ pub const Engine = struct {
                 self.applyPrefs();
                 self.requestFull();
             },
+            .add_device => {
+                self.m_panel_zb_add_open = true;
+                self.m_panel_zb_add_state = .{};
+                self.requestFull();
+            },
             .toggle => {
                 if (!self.emitWireless(.{ .zb_toggle = h.dev })) {
                     if (h.dev < self.prefs.wireless.zb_dev_on.len) {
@@ -5844,6 +5915,10 @@ pub const Engine = struct {
                 self.requestFull();
             },
             .node_name => self.openTextPad(.wl_zb_node_name, "Node name", std.mem.sliceTo(&self.prefs.wireless.zb_node_name, 0)),
+            .node_channel_name => {
+                self.zb_node_channel_idx = h.dev;
+                self.openTextPad(.wl_zb_node_channel_name, "Channel name", std.mem.sliceTo(&self.prefs.wireless.zb_node_channels[h.dev].name, 0));
+            },
             .node_led_gpio => {
                 self.zb_node_channel_idx = 0xff;
                 const gpio = self.prefs.wireless.zb_node_led_gpio;
@@ -5869,6 +5944,45 @@ pub const Engine = struct {
             .node_poll => {
                 self.zb_node_channel_idx = h.dev;
                 self.openNumberForTarget(.wl_zb_node_poll, "Poll interval: 15-3600 seconds", self.prefs.wireless.zb_node_channels[h.dev].poll_interval_s);
+            },
+            .node_favorite => {
+                const ch = &self.prefs.wireless.zb_node_channels[h.dev];
+                const next: u8 = (ch.favorite + 1) % 4;
+                if (next != 0) for (&self.prefs.wireless.zb_node_channels) |*other| {
+                    if (other.favorite == next) other.favorite = 0;
+                };
+                ch.favorite = next;
+                self.applyPrefs();
+                self.requestFull();
+            },
+            .node_start => {
+                const ch = &self.prefs.wireless.zb_node_channels[h.dev];
+                ch.start_mode = if (ch.start_mode == 0) 1 else 0;
+                if (ch.start_mode == 1) ch.flags |= 4 else ch.flags &= ~@as(u8, 4);
+                _ = self.emitWireless(.{ .zb_node_channel = .{ .index = h.dev, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
+                self.applyPrefs();
+                self.requestFull();
+            },
+            .node_alarm_enabled => {
+                const ch = &self.prefs.wireless.zb_node_channels[h.dev];
+                ch.temp_alarm_enabled = !ch.temp_alarm_enabled;
+                if (!ch.temp_alarm_enabled) ch.temp_alarm_active = false;
+                self.applyPrefs();
+                self.requestFull();
+            },
+            .node_alarm_high => {
+                self.zb_node_channel_idx = h.dev;
+                const v = @divTrunc(self.prefs.wireless.zb_node_channels[h.dev].temp_alarm_high_centi_c, 100);
+                self.openNumberForTarget(.wl_zb_node_alarm_high, "High alarm in degrees Celsius", @intCast(@max(0, v)));
+            },
+            .node_alarm_low => {
+                self.zb_node_channel_idx = h.dev;
+                const v = @divTrunc(self.prefs.wireless.zb_node_channels[h.dev].temp_alarm_low_centi_c, 100);
+                self.openNumberForTarget(.wl_zb_node_alarm_low, "Low alarm in degrees Celsius", @intCast(@max(0, v)));
+            },
+            .node_alarm_hysteresis => {
+                self.zb_node_channel_idx = h.dev;
+                self.openNumberForTarget(.wl_zb_node_alarm_hysteresis, "Hysteresis in whole degrees Celsius", self.prefs.wireless.zb_node_channels[h.dev].temp_alarm_hysteresis_centi_c / 100);
             },
             .node_polarity => {
                 const i = h.dev;
@@ -5945,6 +6059,7 @@ pub const Engine = struct {
         self.m_panel_term_scroll = 0;
         self.m_panel_usb_scroll = 0;
         self.m_panel_sd_scroll = 0;
+        if (index == @intFromEnum(m_panel.ToolId.controls)) self.m_panel_quick_slot = 0xff;
         if (index == @intFromEnum(m_panel.ToolId.usb)) {
             self.m_panel_usb_catalog.refresh(self.prefs.storage.usb_host);
         }
@@ -5957,6 +6072,11 @@ pub const Engine = struct {
         if (index == @intFromEnum(m_panel.ToolId.zigbee)) {
             if (!self.prefs.wireless.zigbee) self.prefs.wireless.zigbee = true;
             _ = self.emitWireless(.zb_refresh);
+        }
+        if (index == @intFromEnum(m_panel.ToolId.firmware_update)) {
+            if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
         }
         if (index == @intFromEnum(m_panel.ToolId.c6_update)) {
             self.m_panel_c6_ota_state.view = .dashboard;
@@ -5991,6 +6111,105 @@ pub const Engine = struct {
         self.requestFull();
     }
 
+    fn openFirmwareTarget(self: *Engine, target: m_panel_update_hub.Target) void {
+        if (target == .node) {
+            self.showSnackbar("Zigbee Node update requires USB");
+            self.requestFull();
+            return;
+        }
+        self.m_panel_tool = switch (target) {
+            .c6 => @intFromEnum(m_panel.ToolId.c6_update),
+            .s3 => @intFromEnum(m_panel.ToolId.s3_update),
+            .nano => @intFromEnum(m_panel.ToolId.nano_update),
+            .node => unreachable,
+        };
+        switch (target) {
+            .c6 => {
+                self.m_panel_c6_ota_state.view = .firmware;
+                if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            },
+            .s3 => {
+                self.m_panel_s3_ota_state.view = .firmware;
+                if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            },
+            .nano => {
+                self.m_panel_nano_ota_state.view = .firmware;
+                if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            },
+            .node => unreachable,
+        }
+        snapEnter(&self.m_panel_fx);
+        self.requestFull();
+    }
+
+    /// Host preview entry point used to review the M-Panel before device flash.
+    pub fn openMPanelPreview(self: *Engine) void {
+        self.openMPanel();
+    }
+
+    fn beginZbAdd(self: *Engine, device_type: m_panel_zigbee_add.DeviceType) void {
+        self.m_panel_zb_add_state = .{ .stage = .connect, .device_type = device_type, .devices_before = self.prefs.wireless.live_zb_n };
+        if (!self.prefs.wireless.zigbee) {
+            self.prefs.wireless.zigbee = true;
+            self.applyPrefs();
+        }
+        self.driveZbAddWizard();
+        self.requestFull();
+    }
+
+    fn driveZbAddWizard(self: *Engine) void {
+        if (!self.m_panel_zb_add_open or self.m_panel_zb_add_state.stage != .connect) return;
+        if (self.prefs.wireless.live_zb_n > self.m_panel_zb_add_state.devices_before) {
+            self.m_panel_zb_add_state.stage = .found;
+            return;
+        }
+        if (!self.prefs.wireless.zb_joined) {
+            if (!self.prefs.wireless.zb_join_pending) {
+                if (!self.emitWireless(.zb_join)) self.prefs.wireless.joinZigbee() else self.prefs.wireless.zb_join_pending = true;
+            }
+            return;
+        }
+        if (!self.m_panel_zb_add_state.pairing_started) {
+            self.m_panel_zb_add_state.pairing_started = true;
+            self.startZbPermitJoin();
+        }
+    }
+
+    fn handleZbAddClick(self: *Engine, x: i32, y: i32) void {
+        const h = m_panel_zigbee_add.hit(self.m_panel_zb_add_layout, x, y);
+        switch (h.kind) {
+            .none => {},
+            .exit => self.closeToolToDashboard(),
+            .back => if (self.m_panel_zb_add_state.stage == .choose) {
+                self.m_panel_zb_add_open = false;
+                self.requestFull();
+            } else {
+                self.m_panel_zb_add_state = .{};
+                self.requestFull();
+            },
+            .node => self.beginZbAdd(.node),
+            .other => self.beginZbAdd(.other),
+            .retry => {
+                self.m_panel_zb_add_state.pairing_started = false;
+                self.driveZbAddWizard();
+            },
+            .finish => {
+                self.m_panel_zb_add_open = false;
+                if (self.prefs.wireless.live_zb_n > 0) {
+                    self.zb_rename_idx = self.prefs.wireless.live_zb_n - 1;
+                    self.openTextPad(.wl_zb_name, "Device name", self.prefs.wireless.zbDevLabel(self.zb_rename_idx));
+                }
+                self.requestFull();
+            },
+        }
+    }
+
+    fn returnToFirmwareHub(self: *Engine) void {
+        self.m_panel_tool = @intFromEnum(m_panel.ToolId.firmware_update);
+        snapEnter(&self.m_panel_fx);
+        self.requestFull();
+    }
+
     fn handleMPanelClick(self: *Engine, x: i32, y: i32) void {
         if (self.m_panel_tool != 0xff) {
             if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.terminal)) {
@@ -6002,7 +6221,56 @@ pub const Engine = struct {
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.sd)) {
                 self.handleSdClick(x, y);
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.zigbee)) {
-                self.handleZigbeeClick(x, y);
+                if (self.m_panel_zb_add_open) self.handleZbAddClick(x, y) else self.handleZigbeeClick(x, y);
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.controls)) {
+                const h = m_panel_controls.hit(self.m_panel_controls_layout, self.m_panel_controls_page, x, y);
+                switch (h.kind) {
+                    .none => {},
+                    .back => {
+                        self.m_panel_quick_slot = 0xff;
+                        self.returnToMPanelFromTool();
+                    },
+                    .exit => self.closeToolToDashboard(),
+                    .prev => { self.m_panel_controls_page -|= 1; self.requestFull(); },
+                    .next => { self.m_panel_controls_page = @min(1, self.m_panel_controls_page + 1); self.requestFull(); },
+                    .toggle => {
+                        if (h.channel < self.prefs.wireless.zb_node_channel_count) {
+                            if (self.m_panel_quick_slot < 3) {
+                                self.assignQuickControl(h.channel);
+                                return;
+                            }
+                            const ch = &self.prefs.wireless.zb_node_channels[h.channel];
+                            ch.digital_value = !ch.digital_value;
+                            _ = self.emitWireless(.{ .zb_node_output = .{ .index = h.channel, .on = ch.digital_value } });
+                            self.requestFull();
+                        }
+                    },
+                    .configure => {
+                        if (h.channel < self.prefs.wireless.zb_node_channel_count and self.m_panel_quick_slot < 3) {
+                            self.assignQuickControl(h.channel);
+                        } else if (h.channel < 8) {
+                            self.prefs.wireless.zb_node_open = true;
+                            self.prefs.wireless.zb_node_page = h.channel + 1;
+                            self.m_panel_tool = @intFromEnum(m_panel.ToolId.zigbee);
+                            self.requestFull();
+                        }
+                    },
+                }
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.firmware_update)) {
+                const h = m_panel_update_hub.hit(self.m_panel_update_hub_layout, x, y);
+                switch (h.kind) {
+                    .none => {},
+                    .back => self.returnToMPanelFromTool(),
+                    .exit => self.closeToolToDashboard(),
+                    .target => self.openFirmwareTarget(h.target),
+                    .refresh => {
+                        if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                        if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                        if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                        self.showSnackbar("USB drive rescanned");
+                        self.requestFull();
+                    },
+                }
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.c6_update)) {
                 if (self.m_panel_c6_ota_state.phase == .flashing or self.m_panel_c6_ota_state.phase == .success) {
                     self.requestFull();
@@ -6011,7 +6279,7 @@ pub const Engine = struct {
                 const h = m_panel_c6_ota.hit(self.m_panel_c6_ota_layout, x, y);
                 switch (h.kind) {
                     .none => {},
-                    .scrim, .back => self.returnToMPanelFromTool(),
+                    .scrim, .back => self.returnToFirmwareHub(),
                     .exit => self.closeToolToDashboard(),
                     .detail_back => self.m_panel_c6_ota_state.view = .dashboard,
                     .firmware => self.m_panel_c6_ota_state.view = .firmware,
@@ -6042,7 +6310,7 @@ pub const Engine = struct {
                 }
                 switch (h.kind) {
                     .none => {},
-                    .scrim, .back => self.returnToMPanelFromTool(),
+                    .scrim, .back => self.returnToFirmwareHub(),
                     .exit => self.closeToolToDashboard(),
                     .detail_back => self.m_panel_s3_ota_state.view = .dashboard,
                     .refresh => if (self.s3_ota_cmd_sink) |sink| {
@@ -6101,7 +6369,7 @@ pub const Engine = struct {
                 const h = m_panel_nano_ota.hit(self.m_panel_nano_ota_layout, x, y);
                 switch (h.kind) {
                     .none => {},
-                    .scrim, .back => self.returnToMPanelFromTool(),
+                    .scrim, .back => self.returnToFirmwareHub(),
                     .exit => self.closeToolToDashboard(),
                     .detail_back => self.m_panel_nano_ota_state.view = .dashboard,
                     .firmware => self.m_panel_nano_ota_state.view = .firmware,
@@ -6125,6 +6393,26 @@ pub const Engine = struct {
             .none => {},
             .scrim, .close => self.closeMPanel(),
             .tile => self.openMPanelTool(h.index),
+            .favorite => {
+                if (h.channel < self.prefs.wireless.zb_node_channel_count) {
+                    const ch = &self.prefs.wireless.zb_node_channels[h.channel];
+                    if (ch.typ == 1 or ch.typ == 2) {
+                        ch.digital_value = !ch.digital_value;
+                        _ = self.emitWireless(.{ .zb_node_output = .{ .index = h.channel, .on = ch.digital_value } });
+                        self.requestFull();
+                    } else {
+                        self.m_panel_tool = @intFromEnum(m_panel.ToolId.controls);
+                        self.m_panel_controls_page = h.channel / 4;
+                        snapEnter(&self.m_panel_fx);
+                        self.requestFull();
+                    }
+                } else {
+                    self.m_panel_tool = @intFromEnum(m_panel.ToolId.controls);
+                    self.m_panel_quick_slot = h.index;
+                    snapEnter(&self.m_panel_fx);
+                    self.requestFull();
+                }
+            },
         }
     }
 
@@ -6424,10 +6712,57 @@ pub const Engine = struct {
         return sink();
     }
 
+    fn assignQuickControl(self: *Engine, channel: u8) void {
+        if (self.m_panel_quick_slot >= 3 or channel >= self.prefs.wireless.zb_node_channel_count) return;
+        const position = self.m_panel_quick_slot + 1;
+        for (&self.prefs.wireless.zb_node_channels) |*other| {
+            if (other.favorite == position) other.favorite = 0;
+        }
+        self.prefs.wireless.zb_node_channels[channel].favorite = position;
+        self.m_panel_quick_slot = 0xff;
+        self.applyPrefs();
+        self.returnToMPanelFromTool();
+        self.showSnackbar("Quick control added");
+    }
+
+    fn updateZbTemperatureAlarms(self: *Engine) void {
+        var active: u8 = 0xff;
+        for (self.prefs.wireless.zb_node_channels[0..8], 0..) |*ch, i| {
+            if (!ch.temp_alarm_enabled or ch.typ != 4 or ch.temperature_state != 1) {
+                ch.temp_alarm_active = false;
+                continue;
+            }
+            const t = ch.temperature_centi_c;
+            const hyst: i32 = ch.temp_alarm_hysteresis_centi_c;
+            if (!ch.temp_alarm_active) {
+                ch.temp_alarm_active = t >= ch.temp_alarm_high_centi_c or t <= ch.temp_alarm_low_centi_c;
+            } else {
+                ch.temp_alarm_active = @as(i32, t) >= @as(i32, ch.temp_alarm_high_centi_c) - hyst or
+                    @as(i32, t) <= @as(i32, ch.temp_alarm_low_centi_c) + hyst;
+            }
+            if (ch.temp_alarm_active and active == 0xff) active = @intCast(i);
+        }
+        if (active != 0xff and (self.zb_temp_alarm_idx != active or self.snack_frames == 0)) {
+            self.zb_temp_alarm_idx = active;
+            const ch = &self.prefs.wireless.zb_node_channels[active];
+            var msg: [96]u8 = undefined;
+            const name = std.mem.sliceTo(&ch.name, 0);
+            const text = std.fmt.bufPrint(&msg, "Temperature alarm: {s} {d:.1} C", .{ if (name.len == 0) "Channel" else name, @as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0 }) catch "Temperature alarm";
+            self.showSnackbarError(text);
+            self.snack_frames = std.math.maxInt(u32);
+        } else if (active == 0xff and self.zb_temp_alarm_idx != 0xff) {
+            self.zb_temp_alarm_idx = 0xff;
+            self.snack_frames = 0;
+            self.snack_len = 0;
+            self.requestFull();
+        }
+    }
+
     pub fn tick(self: *Engine, dt_sec: f32) FrameMetrics {
         const t_tick_start = self.nowUs();
         self.dirty.clear();
         self.frame_n +%= 1;
+        if (@rem(self.frame_n, 30) == 0) self.updateZbTemperatureAlarms();
         if (self.qs_blank_armed and (self.frame_n -% self.qs_blank_arm_frame) > 12) {
             self.qs_blank_armed = false;
         }

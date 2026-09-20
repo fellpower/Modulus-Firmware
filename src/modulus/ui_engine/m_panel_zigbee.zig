@@ -64,6 +64,7 @@ pub const Kind = enum {
     permit_join,
     refresh,
     join_hub,
+    add_device,
     toggle,
     slider,
     child_lock,
@@ -74,11 +75,18 @@ pub const Kind = enum {
     remove,
     configure,
     node_name,
+    node_channel_name,
     node_type,
     node_gpio,
     node_polarity,
     node_pullup,
     node_poll,
+    node_favorite,
+    node_start,
+    node_alarm_enabled,
+    node_alarm_high,
+    node_alarm_low,
+    node_alarm_hysteresis,
     node_led_gpio,
     node_led_polarity,
     node_apply,
@@ -93,6 +101,7 @@ pub const Layout = struct {
     permit: geom.Rect = .{},
     refresh: geom.Rect = .{},
     join: geom.Rect = .{},
+    add: geom.Rect = .{},
     view: geom.Rect = .{},
     cards: [max_devices]CardLayout = [_]CardLayout{.{}} ** max_devices,
     card_n: u8 = 0,
@@ -103,8 +112,15 @@ pub const Layout = struct {
     node_led_gpio: geom.Rect = .{},
     node_led_polarity: geom.Rect = .{},
     node_type: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_channel_name: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_gpio: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_poll: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_favorite: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_start: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_alarm_enabled: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_alarm_high: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_alarm_low: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_alarm_hysteresis: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_pullup: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_polarity: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_apply: geom.Rect = .{},
@@ -423,50 +439,14 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
         bar_y = status_y + body_lh * 2 + tokens.Space.md;
     }
 
-    const permit_w = btnWidth(if (w.zb_scan_phase == 1) "Joining..." else "Permit join");
-    lay.permit = .{ .x = shell.x + pad, .y = bar_y, .w = permit_w, .h = btn_size.height() };
-    const ref_w = btnWidth("Refresh");
-    lay.refresh = .{ .x = lay.permit.x + permit_w + tokens.Space.sm, .y = bar_y, .w = ref_w, .h = btn_size.height() };
-    if (!w.zb_joined) {
-        const jw = btnWidth("Join hub");
-        lay.join = .{ .x = lay.refresh.x + ref_w + tokens.Space.sm, .y = bar_y, .w = jw, .h = btn_size.height() };
-    }
-
-    const permit_on = w.zigbee and w.zb_joined and w.zb_scan_phase == 1;
-    if (w.zigbee and w.zb_joined) {
-        if (permit_on) {
-            widgets.drawFilledButton(logical, lay.permit, "Joining...", theme);
-        } else {
-            widgets.drawFilledButton(logical, lay.permit, "Permit join", theme);
-        }
-    } else {
-        widgets.drawButton(logical, lay.permit, "Permit join", .filled, .disabled, theme);
-    }
-    if (w.zigbee) {
-        widgets.drawTonalButton(logical, lay.refresh, "Refresh", theme);
-    } else {
-        widgets.drawButton(logical, lay.refresh, "Refresh", .tonal, .disabled, theme);
-    }
-    if (!w.zb_joined) {
-        widgets.drawTonalButton(logical, lay.join, "Join hub", theme);
-    }
-
-    if (permit_on) {
-        const prog_w = lay.refresh.x + lay.refresh.w - lay.permit.x;
-        const prog: geom.Rect = .{
-            .x = lay.permit.x,
-            .y = lay.permit.y + lay.permit.h + tokens.Space.xs,
-            .w = prog_w,
-            .h = tokens.Space.xs,
-        };
-        expr.drawLoadingIndicator(logical, prog, ctx.anim_t * 8.0, theme);
-    }
+    lay.add = .{ .x = shell.x + pad, .y = bar_y, .w = 300, .h = 64 };
+    widgets.drawFilledButton(logical, lay.add, "Add Zigbee device", theme);
 
     const footer_h = if (w.zb_node_open) 0 else btn_size.height() + tokens.Space.md;
     const body_top = if (w.zb_node_open)
         lay.header.back.y + lay.header.back.h + tokens.Space.sm
     else
-        bar_y + btn_size.height() + tokens.Space.md + if (permit_on) tokens.Space.sm + tokens.Space.xs else 0;
+        bar_y + lay.add.h + tokens.Space.md;
     lay.view = .{
         .x = shell.x + pad,
         .y = body_top,
@@ -505,65 +485,81 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
             const page_h = font.faceHeight(font.faceForRole(.title_m));
             font.drawTextRole(logical, section.x + @divTrunc(section.w - page_w, 2), section.y + @divTrunc(section.h - page_h, 2), page_text, theme.on_primary_container, .title_m);
             y += section.h + node_gap;
-            lay.node_name = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
-            paintDropdownRow(logical, theme, lay.node_name, "Device name", std.mem.sliceTo(&w.zb_node_name, 0)); y += row + node_gap;
             const types = [_][]const u8{ "Disabled", "Switch", "Digital output", "Digital input", "DS18B20" };
             if (page == 0) {
+                lay.node_name = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
+                paintDropdownRow(logical, theme, lay.node_name, "Device name", std.mem.sliceTo(&w.zb_node_name, 0));
+                y += row + node_gap;
                 var led_gpio: [12]u8 = undefined;
                 lay.node_led_gpio = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
                 const led_text = if (w.zb_node_led_gpio < 0) "None" else std.fmt.bufPrint(&led_gpio, "GPIO {d}", .{w.zb_node_led_gpio}) catch "?";
-                paintDropdownRow(logical, theme, lay.node_led_gpio, "Status LED pin", led_text); y += row + node_gap;
+                paintDropdownRow(logical, theme, lay.node_led_gpio, "Status LED pin", led_text);
+                y += row + node_gap;
                 lay.node_led_polarity = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
-                paintToggleRow(logical, theme, lay.node_led_polarity, "LED active low", (w.zb_node_led_flags & 1) != 0); y += row + node_gap;
+                paintToggleRow(logical, theme, lay.node_led_polarity, "LED active low", (w.zb_node_led_flags & 1) != 0);
+                y += row + node_gap;
             } else {
-              var i: usize = 0;
-              while (i < last - first) : (i += 1) {
-                const channel_idx = first + i;
-                var gpio: [12]u8 = undefined;
-                lay.node_type[i] = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
-                const ch = &w.zb_node_channels[channel_idx];
-                paintDropdownRow(logical, theme, lay.node_type[i], "Function", types[@min(@as(usize, ch.typ), types.len - 1)]);
-                y += row + node_gap;
-                lay.node_gpio[i] = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
-                const gpio_text = if (ch.gpio < 0) "None" else std.fmt.bufPrint(&gpio, "GPIO {d}", .{ch.gpio}) catch "?";
-                paintDropdownRow(logical, theme, lay.node_gpio[i], "Pin", gpio_text);
-                y += row + node_gap;
-                if (ch.typ == 4) {
-                    var period: [24]u8 = undefined;
-                    lay.node_poll[i] = .{ .x=lay.view.x, .y=y, .w=full_w, .h=row };
-                    paintDropdownRow(logical, theme, lay.node_poll[i], "Poll interval", std.fmt.bufPrint(&period, "{d} s", .{ch.poll_interval_s}) catch "?");
-                    y += row + node_gap;
-                    var reading: [32]u8 = undefined;
-                    const value = if (ch.gpio < 0) "Select a GPIO" else switch (ch.temperature_state) {
-                        1 => std.fmt.bufPrint(&reading, "{d:.2} C", .{@as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0}) catch "?",
-                        2 => "Sensor missing / error",
-                        3 => "No recent reading",
-                        4 => "Apply and restart required",
-                        else => "Waiting for reading",
-                    };
-                    paintReadonly(logical, theme, .{ .x=lay.view.x, .y=y, .w=full_w, .h=row }, "Temperature", value, theme.on_surface_variant);
-                    y += row + node_gap;
-                } else if (ch.typ == 3) {
+                var i: usize = 0;
+                while (i < last - first) : (i += 1) {
+                    const channel_idx = first + i;
+                    var gpio: [12]u8 = undefined;
+                    const ch = &w.zb_node_channels[channel_idx];
                     const half = @divTrunc(full_w - node_gap, 2);
-                    lay.node_polarity[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
-                    paintToggleRow(logical, theme, lay.node_polarity[i], "Active low", (ch.flags & 1) != 0);
-                    lay.node_pullup[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
-                    paintToggleRow(logical, theme, lay.node_pullup[i], "Internal pull-up", (ch.flags & 2) != 0);
+                    lay.node_channel_name[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                    paintDropdownRow(logical, theme, lay.node_channel_name[i], "Name", std.mem.sliceTo(&ch.name, 0));
+                    lay.node_type[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                    paintDropdownRow(logical, theme, lay.node_type[i], "Function", types[@min(@as(usize, ch.typ), types.len - 1)]);
                     y += row + node_gap;
-                    const state = if (ch.gpio < 0) "Select a GPIO" else switch (ch.digital_state) {
-                        1 => if (ch.digital_value) "ON" else "OFF",
-                        2 => "No recent state",
-                        3 => "Apply and restart required",
-                        else => "Waiting for state",
-                    };
-                    paintReadonly(logical, theme, .{ .x=lay.view.x, .y=y, .w=full_w, .h=row }, "Input", state, theme.on_surface_variant);
+                    lay.node_gpio[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                    const gpio_text = if (ch.gpio < 0) "None" else std.fmt.bufPrint(&gpio, "GPIO {d}", .{ch.gpio}) catch "?";
+                    paintDropdownRow(logical, theme, lay.node_gpio[i], "Pin", gpio_text);
+                    lay.node_favorite[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                    const favorites = [_][]const u8{ "Not shown", "Position 1", "Position 2", "Position 3" };
+                    paintDropdownRow(logical, theme, lay.node_favorite[i], "Quick access", favorites[@min(@as(usize, ch.favorite), 3)]);
                     y += row + node_gap;
-                } else if (ch.typ == 1 or ch.typ == 2) {
-                lay.node_polarity[i] = .{ .x = lay.view.x, .y = y, .w = full_w, .h = row };
-                paintToggleRow(logical, theme, lay.node_polarity[i], "Active low", (ch.flags & 1) != 0);
-                y += row + node_gap;
+                    if (ch.typ == 4) {
+                        var period: [24]u8 = undefined;
+                        lay.node_poll[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                        paintDropdownRow(logical, theme, lay.node_poll[i], "Poll interval", std.fmt.bufPrint(&period, "{d} s", .{ch.poll_interval_s}) catch "?");
+                        lay.node_alarm_enabled[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                        paintToggleRow(logical, theme, lay.node_alarm_enabled[i], "Temperature alarm", ch.temp_alarm_enabled);
+                        y += row + node_gap;
+                        var low: [24]u8 = undefined;
+                        var high: [24]u8 = undefined;
+                        lay.node_alarm_low[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                        paintDropdownRow(logical, theme, lay.node_alarm_low[i], "Low alarm", std.fmt.bufPrint(&low, "{d:.1} C", .{@as(f32, @floatFromInt(ch.temp_alarm_low_centi_c)) / 100.0}) catch "?");
+                        lay.node_alarm_high[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                        paintDropdownRow(logical, theme, lay.node_alarm_high[i], "High alarm", std.fmt.bufPrint(&high, "{d:.1} C", .{@as(f32, @floatFromInt(ch.temp_alarm_high_centi_c)) / 100.0}) catch "?");
+                        y += row + node_gap;
+                        var hyst: [24]u8 = undefined;
+                        lay.node_alarm_hysteresis[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                        paintDropdownRow(logical, theme, lay.node_alarm_hysteresis[i], "Hysteresis", std.fmt.bufPrint(&hyst, "{d:.1} C", .{@as(f32, @floatFromInt(ch.temp_alarm_hysteresis_centi_c)) / 100.0}) catch "?");
+                        var reading: [32]u8 = undefined;
+                        const value = if (ch.gpio < 0) "Select a GPIO" else if (ch.temperature_state == 1) std.fmt.bufPrint(&reading, "{d:.2} C", .{@as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0}) catch "?" else "Waiting / unavailable";
+                        paintReadonly(logical, theme, .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row }, "Temperature", value, if (ch.temp_alarm_active) theme.err else theme.on_surface_variant);
+                        y += row + node_gap;
+                    } else if (ch.typ == 3) {
+                        lay.node_polarity[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                        paintToggleRow(logical, theme, lay.node_polarity[i], "Active low", (ch.flags & 1) != 0);
+                        lay.node_pullup[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                        paintToggleRow(logical, theme, lay.node_pullup[i], "Internal pull-up", (ch.flags & 2) != 0);
+                        y += row + node_gap;
+                        const state = if (ch.gpio < 0) "Select a GPIO" else switch (ch.digital_state) {
+                            1 => if (ch.digital_value) "ON" else "OFF",
+                            2 => "No recent state",
+                            3 => "Apply and restart required",
+                            else => "Waiting for state",
+                        };
+                        paintReadonly(logical, theme, .{ .x = lay.view.x, .y = y, .w = full_w, .h = row }, "Input", state, theme.on_surface_variant);
+                        y += row + node_gap;
+                    } else if (ch.typ == 1 or ch.typ == 2) {
+                        lay.node_polarity[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
+                        paintToggleRow(logical, theme, lay.node_polarity[i], "Active low", (ch.flags & 1) != 0);
+                        lay.node_start[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                        paintDropdownRow(logical, theme, lay.node_start[i], "After restart", if (ch.start_mode == 1) "On" else "Off");
+                        y += row + node_gap;
+                    }
                 }
-              }
             }
             lay.node_apply = .{ .x = lay.view.x, .y = y + tokens.Space.sm, .w = 300, .h = btn_size.height() };
             lay.node_close = .{ .x = lay.node_apply.x + lay.node_apply.w + tokens.Space.sm, .y = lay.node_apply.y, .w = 160, .h = btn_size.height() };
@@ -574,11 +570,8 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
             widgets.drawFilledButton(logical, lay.node_apply, "Apply and restart", theme);
             widgets.drawTonalButton(logical, lay.node_close, "Close", theme);
             if (count > 1) {
-                if (page > 0) widgets.drawTonalButton(logical, lay.node_prev, "Previous", theme)
-                else widgets.drawButton(logical, lay.node_prev, "Previous", .tonal, .disabled, theme);
-                if (page + 1 < pages) widgets.drawFilledButton(logical, lay.node_next, "Next", theme)
-                else if (count < w.zb_node_channels.len) widgets.drawFilledButton(logical, lay.node_next, "Add channel", theme)
-                else widgets.drawButton(logical, lay.node_next, "Next", .filled, .disabled, theme);
+                if (page > 0) widgets.drawTonalButton(logical, lay.node_prev, "Previous", theme) else widgets.drawButton(logical, lay.node_prev, "Previous", .tonal, .disabled, theme);
+                if (page + 1 < pages) widgets.drawFilledButton(logical, lay.node_next, "Next", theme) else if (count < w.zb_node_channels.len) widgets.drawFilledButton(logical, lay.node_next, "Add channel", theme) else widgets.drawButton(logical, lay.node_next, "Next", .filled, .disabled, theme);
             }
         }
         logical.setClip(null);
@@ -751,6 +744,7 @@ pub fn hit(layout: Layout, x: i32, y: i32) Hit {
     if (layout.permit.contains(x, y)) return .{ .kind = .permit_join };
     if (layout.refresh.contains(x, y)) return .{ .kind = .refresh };
     if (!layout.join.isEmpty() and layout.join.contains(x, y)) return .{ .kind = .join_hub };
+    if (layout.add.contains(x, y)) return .{ .kind = .add_device };
     if (layout.node_name.contains(x, y)) return .{ .kind = .node_name };
     if (layout.node_led_gpio.contains(x, y)) return .{ .kind = .node_led_gpio };
     if (layout.node_led_polarity.contains(x, y)) return .{ .kind = .node_led_polarity };
@@ -761,8 +755,15 @@ pub fn hit(layout: Layout, x: i32, y: i32) Hit {
     for (0..4) |i| {
         const channel: u8 = layout.node_page_start + @as(u8, @intCast(i));
         if (layout.node_type[i].contains(x, y)) return .{ .kind = .node_type, .dev = channel };
+        if (layout.node_channel_name[i].contains(x, y)) return .{ .kind = .node_channel_name, .dev = channel };
         if (layout.node_gpio[i].contains(x, y)) return .{ .kind = .node_gpio, .dev = channel };
         if (layout.node_poll[i].contains(x, y)) return .{ .kind = .node_poll, .dev = channel };
+        if (layout.node_favorite[i].contains(x, y)) return .{ .kind = .node_favorite, .dev = channel };
+        if (layout.node_start[i].contains(x, y)) return .{ .kind = .node_start, .dev = channel };
+        if (layout.node_alarm_enabled[i].contains(x, y)) return .{ .kind = .node_alarm_enabled, .dev = channel };
+        if (layout.node_alarm_high[i].contains(x, y)) return .{ .kind = .node_alarm_high, .dev = channel };
+        if (layout.node_alarm_low[i].contains(x, y)) return .{ .kind = .node_alarm_low, .dev = channel };
+        if (layout.node_alarm_hysteresis[i].contains(x, y)) return .{ .kind = .node_alarm_hysteresis, .dev = channel };
         if (layout.node_pullup[i].contains(x, y)) return .{ .kind = .node_pullup, .dev = channel };
         if (layout.node_polarity[i].contains(x, y)) return .{ .kind = .node_polarity, .dev = channel };
     }
@@ -784,7 +785,7 @@ test "zigbee panel chrome meets touch_min" {
     wl.joinZigbee();
     const lay = paint(&logical, tokens.Theme.industrialTealDark(), .{ .wireless = &wl }, 1);
     try std.testing.expect(lay.header.exit.w >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.permit.h >= tokens.Logical.touch_min);
+    try std.testing.expect(lay.add.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.card_n >= 3);
     try std.testing.expectEqual(@as(u8, 3), lay.grid_cols);
     if (lay.card_n > 0) {
@@ -793,7 +794,6 @@ test "zigbee panel chrome meets touch_min" {
         try std.testing.expect(lay.cards[0].exposes_link.h >= tokens.Logical.touch_min);
     }
 }
-
 
 test "DS18B20 page fits and poll hit selects the correct channel" {
     var logical = try fb.LogicalFb.alloc(std.testing.allocator);
@@ -807,12 +807,12 @@ test "DS18B20 page fits and poll hit selects the correct channel" {
     w.zb_node_channels[11].gpio = 22;
     w.zb_node_channels[11].temperature_state = 1;
     w.zb_node_channels[11].temperature_centi_c = -125;
-    const layout = paint(&logical, tokens.Theme.industrialTealDark(), .{.wireless=&w}, 1.0);
-    try std.testing.expect(layout.node_apply.y+layout.node_apply.h <= layout.view.y+layout.view.h);
-    const r=layout.node_poll[0];
+    const layout = paint(&logical, tokens.Theme.industrialTealDark(), .{ .wireless = &w }, 1.0);
+    try std.testing.expect(layout.node_apply.y + layout.node_apply.h <= layout.view.y + layout.view.h);
+    const r = layout.node_poll[0];
     try std.testing.expect(r.h >= 48);
-    const selected=hit(layout,r.x+10,r.y+10);
-    try std.testing.expectEqual(Kind.node_poll,selected.kind);
-    try std.testing.expectEqual(@as(u8,11),selected.dev);
+    const selected = hit(layout, r.x + 10, r.y + 10);
+    try std.testing.expectEqual(Kind.node_poll, selected.kind);
+    try std.testing.expectEqual(@as(u8, 11), selected.dev);
     try std.testing.expect(layout.node_polarity[0].isEmpty());
 }

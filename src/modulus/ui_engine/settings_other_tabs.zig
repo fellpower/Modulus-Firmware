@@ -1012,7 +1012,7 @@ fn paintWireless(logical: *fb.LogicalFb, theme: tokens.Theme, w: prefs_mod.Wirel
                 if (w.zigbee) {
                     form.paintSection(logical, theme, &cur, scroll, "Network control");
                     lay.push(.wl_zb_join, if (w.zb_joined) form.paintActionAccent(logical, theme, &cur, scroll, "Join network", "Joined") else if (w.zb_join_pending) form.paintAction(logical, theme, &cur, scroll, "Join network", "Joining...") else form.paintAction(logical, theme, &cur, scroll, "Join network", ""), .action);
-                    lay.push(.wl_zb_leave, form.paintAction(logical, theme, &cur, scroll, "Leave network", ""), .action);
+                    lay.push(.wl_zb_leave, form.paintAction(logical, theme, &cur, scroll, "Reset Zigbee network", ""), .action);
                     if (!w.zb_joined) {
                         form.paintNote(logical, theme, &cur, scroll, "Join the network first, then pair devices.");
                     }

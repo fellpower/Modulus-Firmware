@@ -64,6 +64,10 @@ pub const Target = enum {
     wl_zb_code,
     wl_zb_name,
     wl_zb_node_name,
+    wl_zb_node_channel_name,
+    wl_zb_node_alarm_high,
+    wl_zb_node_alarm_low,
+    wl_zb_node_alarm_hysteresis,
     wl_zb_node_gpio,
     wl_zb_node_poll,
     wl_th_node,
@@ -398,8 +402,8 @@ pub fn numberValid(t: Target, txt: []const u8) bool {
     if (isPinTarget(t)) return true;
     if (t == .wl_zb_node_gpio and txt.len == 0) return true;
     if (t == .wl_zb_node_poll) {
-        const seconds=std.fmt.parseInt(u16,txt,10) catch return false;
-        return seconds>=15 and seconds<=3600;
+        const seconds = std.fmt.parseInt(u16, txt, 10) catch return false;
+        return seconds >= 15 and seconds <= 3600;
     }
     if (txt.len == 0) return false;
     switch (numberKind(t)) {
@@ -1062,10 +1066,9 @@ test "date mode seeds YYYY-MM-DD" {
     try std.testing.expect(panelRect(&st).w == 500);
 }
 
-
 test "node poll interval accepts bounded integer seconds" {
-    try std.testing.expect(numberValid(.wl_zb_node_poll,"15"));
-    try std.testing.expect(numberValid(.wl_zb_node_poll,"3600"));
-    for ([_][]const u8{"", "0", "14", "3601", "15.5", "-15"}) |value|
-        try std.testing.expect(!numberValid(.wl_zb_node_poll,value));
+    try std.testing.expect(numberValid(.wl_zb_node_poll, "15"));
+    try std.testing.expect(numberValid(.wl_zb_node_poll, "3600"));
+    for ([_][]const u8{ "", "0", "14", "3601", "15.5", "-15" }) |value|
+        try std.testing.expect(!numberValid(.wl_zb_node_poll, value));
 }

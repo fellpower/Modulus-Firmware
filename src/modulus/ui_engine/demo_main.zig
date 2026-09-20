@@ -50,6 +50,17 @@ fn paceFrame(frame_start_ms: u64) void {
 fn runWindow(gpa: std.mem.Allocator, io: std.Io) !void {
     var eng = try ui_engine.engine.Engine.create(gpa);
     defer eng.destroy(gpa);
+    eng.prefs.wireless.zb_node_channel_count = 8;
+    for (eng.prefs.wireless.zb_node_channels[0..8], 0..) |*ch, i| {
+        ch.typ = if (i == 3) 4 else 2;
+        ch.gpio = @intCast(i + 1);
+        ch.digital_value = i < 2;
+        ch.temperature_state = if (i == 3) 1 else 0;
+        ch.temperature_centi_c = if (i == 3) 2475 else 0;
+        ch.favorite = if (i < 3) @intCast(i + 1) else 0;
+        const names = [_][]const u8{ "Dust extractor", "Work light", "Air valve", "Coolant water", "Relay 5", "Relay 6", "Relay 7", "Relay 8" };
+        @memcpy(ch.name[0..names[i].len], names[i]);
+    }
 
     var view = try host_win32.View.open("Modulus UI Engine");
     defer view.close();
@@ -96,7 +107,7 @@ fn runWindow(gpa: std.mem.Allocator, io: std.Io) !void {
         if (input.key_theme and !eng.searchFocused()) eng.toggleTheme();
         if (input.key_dialog and !eng.searchFocused()) eng.openDialog();
         if (input.key_pin and !eng.searchFocused()) eng.openPin();
-        if (input.key_catalog and !eng.searchFocused()) eng.openCatalog();
+        if (input.key_catalog and !eng.searchFocused()) eng.openMPanelPreview();
         if (input.key_tab) eng.handleFocusTab(false);
         if (input.key_shift_tab) eng.handleFocusTab(true);
         if (input.key_enter) eng.activateFocus();

@@ -781,6 +781,17 @@ pub const WirelessPrefs = struct {
         temperature_state: u8 = 0,
         digital_value: bool = false,
         digital_state: u8 = 0,
+        /// 0=automatic, otherwise a UI icon id chosen by the operator.
+        icon: u8 = 0,
+        /// 0=not shown, 1..3=favorite position in the M-Panel.
+        favorite: u8 = 0,
+        /// 0=off, 1=on, 2=restore last state.
+        start_mode: u8 = 0,
+        temp_alarm_enabled: bool = false,
+        temp_alarm_high_centi_c: i16 = 5000,
+        temp_alarm_low_centi_c: i16 = -5500,
+        temp_alarm_hysteresis_centi_c: u16 = 200,
+        temp_alarm_active: bool = false,
     };
     /// 0=hub 1=wifi 2=bt 3=espnow 4=zigbee 5=thread 6=wifi_saved 7=wifi_adv
     page: u8 = 0,

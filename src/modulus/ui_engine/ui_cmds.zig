@@ -24,6 +24,7 @@ pub const WirelessUiCmd = union(enum) {
     zb_node_name: []const u8,
     zb_node_channel: struct { index: u8, typ: u8, gpio: i8, flags: u8, name: []const u8 },
     zb_node_poll: struct { index: u8, seconds: u16 },
+    zb_node_output: struct { index: u8, on: bool },
     zb_node_status_led: struct { gpio: i8, flags: u8 },
     zb_node_apply,
     zb_remove: u8,

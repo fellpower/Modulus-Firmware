@@ -771,6 +771,10 @@ pub fn wirelessCmd(eng: *Engine, cmd: ui_engine.engine.WirelessUiCmd) void {
             if (!c.modulus_wireless_zb_node_set_poll(eng.prefs.wireless.zb_node_short, p.index, p.seconds))
                 eng.showSnackbarError("Could not save interval: check Node firmware/link");
         },
+        .zb_node_output => |p| {
+            if (!c.modulus_wireless_zb_node_set_output(eng.prefs.wireless.zb_node_short, p.index, p.on))
+                eng.showSnackbarError("Output command failed");
+        },
         .zb_node_status_led => |p| _ = c.modulus_wireless_zb_node_set_status_led(
             eng.prefs.wireless.zb_node_short, p.gpio, p.flags),
         .zb_node_apply => _ = c.modulus_wireless_zb_node_apply(eng.prefs.wireless.zb_node_short),

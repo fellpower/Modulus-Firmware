@@ -28,6 +28,7 @@ pub const settings_extra_modals = @import("settings_extra_modals.zig");
 pub const settings_pin_modal = @import("settings_pin_modal.zig");
 pub const settings_mach_string_modal = @import("settings_mach_string_modal.zig");
 pub const settings_menu = @import("settings_menu.zig");
+pub const m_panel_update_hub = @import("m_panel_update_hub.zig");
 pub const widgets_expressive = @import("widgets_expressive.zig");
 pub const hct = @import("hct.zig");
 pub const palette = @import("palette.zig");
@@ -119,6 +120,7 @@ test {
     _ = settings_pin_modal;
     _ = settings_mach_string_modal;
     _ = settings_menu;
+    _ = m_panel_update_hub;
     _ = widgets_expressive;
     _ = hct;
     _ = palette;
@@ -138,6 +140,8 @@ test {
     _ = m_panel_sd;
     _ = zb_exposes;
     _ = m_panel_zigbee;
+    _ = @import("m_panel_zigbee_add.zig");
+    _ = @import("m_panel_controls.zig");
     _ = sd_volume;
     _ = zb_purpose;
     _ = ui_lint;

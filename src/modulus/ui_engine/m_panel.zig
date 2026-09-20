@@ -9,6 +9,12 @@ const font = @import("font.zig");
 const widgets = @import("widgets.zig");
 const icons_phosphor = @import("icons_phosphor.zig");
 const color = @import("color.zig");
+const panel_bg = color.Rgb565.fromHex(0x001426);
+const panel_card = color.Rgb565.fromHex(0x03233F);
+const panel_card_hi = color.Rgb565.fromHex(0x07345A);
+const panel_cyan = color.Rgb565.fromHex(0x18C8FF);
+const panel_text = color.Rgb565.fromHex(0xF4FAFF);
+const panel_muted = color.Rgb565.fromHex(0xA9C7E5);
 
 pub const ToolId = enum(u8) {
     terminal = 0,
@@ -16,9 +22,11 @@ pub const ToolId = enum(u8) {
     probe = 2,
     sd = 3,
     zigbee = 4,
-    c6_update = 5,
-    s3_update = 6,
-    nano_update = 7,
+    controls = 5,
+    firmware_update = 6,
+    c6_update = 7,
+    s3_update = 8,
+    nano_update = 9,
 };
 
 pub const Tool = struct {
@@ -34,9 +42,8 @@ pub const tools = [_]Tool{
     .{ .label = "Probe", .icon = .arrow_down },
     .{ .label = "SD Card", .icon = .hard_drives },
     .{ .label = "Zigbee", .icon = .broadcast },
-    .{ .label = "Internal C6", .icon = .cpu },
-    .{ .label = "S3", .icon = .cpu },
-    .{ .label = "NanoH2", .icon = .cpu },
+    .{ .label = "All controls", .icon = .plugs },
+    .{ .label = "Firmware Update", .icon = .arrow_down },
 };
 
 pub fn toolEnabled(index: u8, usb_host: bool) bool {
@@ -44,27 +51,29 @@ pub fn toolEnabled(index: u8, usb_host: bool) bool {
     return !tools[index].requires_usb or usb_host;
 }
 
-pub const cols: i32 = 4;
+pub const cols: i32 = 3;
 pub const visible_rows: i32 = 2;
 const icon_px: i32 = 32;
-const tile_h: i32 = 88;
+const tile_h: i32 = 132;
 const gap: i32 = tokens.Space.sm;
 const close_sz: i32 = tokens.Logical.touch_min;
-const card_w: i32 = 1000;
-const card_h: i32 = 400;
-const title_h: i32 = tokens.Space.lg + 32;
+const card_w: i32 = tokens.Logical.width - 32;
+const card_h: i32 = tokens.Logical.height - 28;
+const title_h: i32 = 84;
 
 pub const Hit = enum {
     none,
     scrim,
     close,
     tile,
+    favorite,
 };
 
 pub const HitInfo = struct {
     kind: Hit = .none,
     /// Tool index when `kind == .tile`.
     index: u8 = 0,
+    channel: u8 = 0,
 };
 
 pub const Layout = struct {
@@ -72,7 +81,10 @@ pub const Layout = struct {
     close: geom.Rect = .{},
     view: geom.Rect = .{},
     tiles: [32]geom.Rect = [_]geom.Rect{.{}} ** 32,
+    tool_indices: [32]u8 = [_]u8{0xff} ** 32,
+    quick: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     tile_n: u8 = 0,
+    favorite_channels: [3]u8 = .{ 0xff, 0xff, 0xff },
     scroll_max: i32 = 0,
 };
 
@@ -100,7 +112,7 @@ fn tileW(card: geom.Rect) i32 {
 }
 
 fn rowCount() i32 {
-    const n = tools.len;
+    const n = tools.len - 1;
     if (n == 0) return visible_rows;
     return @divTrunc(n + @as(usize, @intCast(cols)) - 1, @as(usize, @intCast(cols)));
 }
@@ -110,7 +122,7 @@ pub fn contentH() i32 {
 }
 
 pub fn viewH(card: geom.Rect) i32 {
-    return card.h - title_h - tokens.Space.md;
+    return card.h - 418;
 }
 
 pub fn scrollMax(card: geom.Rect) i32 {
@@ -120,7 +132,7 @@ pub fn scrollMax(card: geom.Rect) i32 {
 fn tileRect(card: geom.Rect, col: i32, row: i32, scroll: i32) geom.Rect {
     const pad = tokens.Space.lg;
     const tw = tileW(card);
-    const y0 = card.y + title_h;
+    const y0 = card.y + 418;
     return .{
         .x = card.x + pad + col * (tw + gap),
         .y = y0 + row * (tile_h + gap) - scroll,
@@ -139,6 +151,14 @@ fn paintClose(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect) void {
     widgets.drawTonalCloseButton(logical, r, theme);
 }
 
+fn paintLargeSwitch(logical: *fb.LogicalFb, r: geom.Rect, on: bool) void {
+    widgets.fillRoundRect(logical, r, @divTrunc(r.h, 2), if (on) color.Rgb565.fromHex(0x079DFF) else color.Rgb565.fromHex(0x173B60));
+    widgets.strokeRoundRect(logical, r, @divTrunc(r.h, 2), panel_cyan, 1);
+    const d = r.h - 10;
+    const x = if (on) r.x + r.w - d - 5 else r.x + 5;
+    widgets.fillRoundRect(logical, .{ .x = x, .y = r.y + 5, .w = d, .h = d }, @divTrunc(d, 2), panel_text);
+}
+
 fn paintTile(
     logical: *fb.LogicalFb,
     r: geom.Rect,
@@ -148,13 +168,13 @@ fn paintTile(
     theme: tokens.Theme,
     enabled: bool,
 ) void {
-    widgets.fillRoundRect(logical, r, tokens.Shape.lg, if (enabled) fill else theme.surface_container_low);
-    if (!enabled) widgets.strokeRoundRect(logical, r, tokens.Shape.lg, theme.outline_variant, 1);
-    const ink = if (enabled) theme.on_surface else theme.on_surface_variant;
-    icons_phosphor.draw(logical, r.x + @divTrunc(r.w - icon_px, 2), r.y + 14, icon, ink);
+    _ = fill;
+    widgets.fillRoundRect(logical, r, tokens.Shape.lg, if (enabled) panel_card else theme.surface_container_low);
+    widgets.strokeRoundRect(logical, r, tokens.Shape.lg, if (enabled) panel_cyan else theme.outline_variant, 2);
+    const ink = if (enabled) panel_text else theme.on_surface_variant;
+    icons_phosphor.draw(logical, r.x + 30, r.y + @divTrunc(r.h - icon_px, 2), icon, ink);
     if (label.len != 0) {
-        const tw = font.textWidthStr(label, .label_m);
-        font.drawTextRole(logical, r.x + @divTrunc(r.w - tw, 2), r.y + 52, label, ink, .label_m);
+        font.drawTextRole(logical, r.x + 86, r.y + @divTrunc(r.h - font.faceHeight(font.faceForRole(.title_m)), 2), label, ink, .title_m);
     }
 }
 
@@ -169,14 +189,24 @@ pub fn paint(
     scroll_px: i32,
     enter_t: f32,
     usb_host: bool,
+    channels: *const [12]@import("settings_prefs.zig").WirelessPrefs.ZbNodeChannel,
+    channel_count: u8,
+    espnow_connected: bool,
+    zigbee_online: u8,
 ) Layout {
-    widgets.fillScrim(logical, theme);
+    logical.fillRect(.{ .x = 0, .y = 0, .w = tokens.Logical.width, .h = tokens.Logical.height }, panel_bg);
     const card = cardGeom(enter_t);
-    widgets.fillRoundRect(logical, card, tokens.Shape.dialog, theme.elev(3));
+    widgets.fillRoundRect(logical, card, tokens.Shape.dialog, panel_bg);
+    widgets.strokeRoundRect(logical, card, tokens.Shape.dialog, panel_cyan, 1);
 
     var lay: Layout = .{ .card = card };
     const title_y = card.y + tokens.Space.md;
-    font.drawTextRole(logical, card.x + tokens.Space.lg, title_y, "M-Panel", theme.on_surface, .title_l);
+    font.drawTextRole(logical, card.x + tokens.Space.lg, title_y, "Modulus   |   M-Panel", panel_text, .title_l);
+    font.drawTextRole(logical, card.x + 430, title_y, "Ready", color.Rgb565.fromHex(0x00EE88), .title_m);
+    font.drawTextRole(logical, card.x + 620, title_y, if (espnow_connected) "ESP-NOW Connected" else "ESP-NOW Offline", if (espnow_connected) panel_cyan else panel_muted, .title_m);
+    var zb_buf: [24]u8 = undefined;
+    const zb_text = std.fmt.bufPrint(&zb_buf, "Zigbee {d} online", .{zigbee_online}) catch "Zigbee";
+    font.drawTextRole(logical, card.x + 930, title_y, zb_text, if (zigbee_online > 0) panel_cyan else panel_muted, .title_m);
     const th = font.faceHeight(font.faceForRole(.title_l));
     lay.close = .{
         .x = card.x + card.w - close_sz - tokens.Space.md,
@@ -186,17 +216,17 @@ pub fn paint(
     };
     paintClose(logical, theme, lay.close);
 
-    const y0 = card.y + title_h;
+    const y0 = card.y + 418;
     lay.view = .{
         .x = card.x + tokens.Space.lg,
         .y = y0,
         .w = card.w - tokens.Space.lg * 2,
-        .h = viewH(card),
+        .h = card.y + card.h - y0 - tokens.Space.md,
     };
     lay.scroll_max = scrollMax(card);
     const scroll = std.math.clamp(scroll_px, 0, lay.scroll_max);
 
-    logical.setClip(lay.view);
+    logical.setClip(card);
     defer logical.setClip(null);
 
     if (tools.len == 0) {
@@ -216,12 +246,65 @@ pub fn paint(
         return lay;
     }
 
+    font.drawTextRole(logical, card.x + tokens.Space.lg, card.y + 82, "Quick controls", panel_text, .title_l);
+    const quick_y = card.y + 128;
+    const quick_h: i32 = 238;
+    const quick_gap: i32 = 16;
+    const quick_w = @divTrunc(card.w - tokens.Space.lg * 2 - quick_gap * 3, 4);
+    var pos: usize = 0;
+    while (pos < 4) : (pos += 1) {
+        const r: geom.Rect = .{ .x = card.x + tokens.Space.lg + @as(i32, @intCast(pos)) * (quick_w + quick_gap), .y = quick_y, .w = quick_w, .h = quick_h };
+        lay.quick[pos] = r;
+        if (pos == 3) {
+            widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card_hi);
+            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, panel_cyan, 2);
+            icons_phosphor.draw(logical, r.x + 32, r.y + 36, .cards_three, panel_cyan);
+            font.drawTextRole(logical, r.x + 92, r.y + 30, "All controls", panel_text, .title_l);
+            font.drawTextRole(logical, r.x + 92, r.y + 86, "8 channels  |  2 pages", panel_muted, .body_m);
+            widgets.drawFilledButton(logical, .{ .x = r.x + 32, .y = r.y + 150, .w = r.w - 64, .h = 64 }, "Open controls", theme);
+            continue;
+        }
+        var found: u8 = 0xff;
+        var ci: u8 = 0;
+        while (ci < @min(channel_count, 8)) : (ci += 1) if (channels[ci].favorite == pos + 1) { found = ci; break; };
+        lay.favorite_channels[pos] = found;
+        if (found == 0xff) {
+            widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card);
+            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, panel_cyan, 2);
+            const plus: geom.Rect = .{ .x = r.x + @divTrunc(r.w - 88, 2), .y = r.y + 24, .w = 88, .h = 88 };
+            widgets.fillRoundRect(logical, plus, 44, color.Rgb565.fromHex(0x079DFF));
+            logical.fillRect(.{ .x = plus.x + 20, .y = plus.y + 40, .w = 48, .h = 8 }, panel_text);
+            logical.fillRect(.{ .x = plus.x + 40, .y = plus.y + 20, .w = 8, .h = 48 }, panel_text);
+            const add = "Add quick control";
+            font.drawTextRole(logical, r.x + @divTrunc(r.w - font.textWidthStr(add, .title_m), 2), r.y + 126, add, panel_text, .title_m);
+            const hint = "Tap to choose";
+            font.drawTextRole(logical, r.x + @divTrunc(r.w - font.textWidthStr(hint, .body_m), 2), r.y + 176, hint, panel_muted, .body_m);
+        } else {
+            const ch = channels[found];
+            var fallback: [20]u8 = undefined;
+            const saved = std.mem.sliceTo(&ch.name, 0);
+            const label = if (saved.len != 0) saved else std.fmt.bufPrint(&fallback, "Channel {d}", .{found + 1}) catch "Channel";
+            widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card);
+            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, if (ch.temp_alarm_active) theme.err else panel_cyan, 2);
+            icons_phosphor.draw(logical, r.x + 32, r.y + 36, if (ch.typ == 4) .thermometer_simple else .plugs, if (ch.temp_alarm_active) theme.err else panel_cyan);
+            font.drawTextRole(logical, r.x + 92, r.y + 30, label, panel_text, .title_l);
+            var state_buf: [24]u8 = undefined;
+            const state = if (ch.typ == 4 and ch.temperature_state == 1) std.fmt.bufPrint(&state_buf, "{d:.1} C", .{@as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0}) catch "" else if (ch.digital_value) "ON" else "OFF";
+            font.drawTextRole(logical, r.x + 92, r.y + 86, state, if (ch.temp_alarm_active) theme.err else theme.primary, .title_m);
+            if (ch.typ == 1 or ch.typ == 2) paintLargeSwitch(logical, .{ .x = r.x + 32, .y = r.y + 150, .w = r.w - 64, .h = 64 }, ch.digital_value);
+        }
+    }
+
+    font.drawTextRole(logical, card.x + tokens.Space.lg, card.y + 378, "Tools", panel_text, .title_l);
     var i: usize = 0;
     while (i < tools.len and lay.tile_n < lay.tiles.len) : (i += 1) {
-        const row: i32 = @intCast(@divTrunc(i, @as(usize, @intCast(cols))));
-        const col: i32 = @intCast(@rem(i, @as(usize, @intCast(cols))));
+        if (i == @intFromEnum(ToolId.controls)) continue;
+        const visual = lay.tile_n;
+        const row: i32 = @intCast(@divTrunc(visual, @as(usize, @intCast(cols))));
+        const col: i32 = @intCast(@rem(visual, @as(usize, @intCast(cols))));
         const r = tileRect(card, col, row, scroll);
         lay.tiles[lay.tile_n] = r;
+        lay.tool_indices[lay.tile_n] = @intCast(i);
         lay.tile_n += 1;
         const tool = tools[i];
         const enabled = toolEnabled(@intCast(i), usb_host);
@@ -233,12 +316,17 @@ pub fn paint(
 pub fn hit(layout: Layout, x: i32, y: i32, usb_host: bool) HitInfo {
     if (layout.close.contains(x, y)) return .{ .kind = .close };
     if (!layout.card.contains(x, y)) return .{ .kind = .scrim };
+    for (layout.quick, 0..) |r, qi| if (r.contains(x, y)) {
+        if (qi == 3) return .{ .kind = .tile, .index = @intFromEnum(ToolId.controls) };
+        return .{ .kind = .favorite, .index = @intCast(qi), .channel = layout.favorite_channels[qi] };
+    };
     if (!layout.view.contains(x, y)) return .{ .kind = .none };
     var i: u8 = 0;
     while (i < layout.tile_n) : (i += 1) {
         if (layout.tiles[i].contains(x, y)) {
-            if (!toolEnabled(i, usb_host)) return .{ .kind = .none };
-            return .{ .kind = .tile, .index = i };
+            const tool_index = layout.tool_indices[i];
+            if (!toolEnabled(tool_index, usb_host)) return .{ .kind = .none };
+            return .{ .kind = .tile, .index = tool_index };
         }
     }
     return .{ .kind = .none };
@@ -310,7 +398,7 @@ test "m-panel grid is 5 columns" {
     try std.testing.expectEqual(r1.x - r0.x, tw + gap);
 }
 
-test "scroll max grows with tools" {
+test "launcher tools fit without scrolling" {
     const card = cardGeom(1);
     try std.testing.expectEqual(@as(i32, 0), scrollMax(card));
 }
@@ -320,11 +408,13 @@ test "hit tile index" {
     var logical = try fb.LogicalFb.alloc(gpa);
     defer logical.deinit(gpa);
     const theme = tokens.Theme.industrialTealDark();
-    const lay = paint(&logical, theme, 0, 1, true);
-    if (lay.tile_n > 0) {
-        const r = lay.tiles[0];
+    const prefs = @import("settings_prefs.zig");
+    var channels = [_]prefs.WirelessPrefs.ZbNodeChannel{.{}} ** 12;
+    const lay = paint(&logical, theme, 0, 1, true, &channels, 0, false, 0);
+    if (lay.tile_n > 3) {
+        const r = lay.tiles[3];
         const h = hit(lay, r.x + @divTrunc(r.w, 2), r.y + @divTrunc(r.h, 2), true);
         try std.testing.expect(h.kind == .tile);
-        try std.testing.expectEqual(@as(u8, 0), h.index);
+        try std.testing.expectEqual(@as(u8, 3), h.index);
     }
 }
