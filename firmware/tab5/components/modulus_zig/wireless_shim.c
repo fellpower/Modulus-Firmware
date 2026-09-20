@@ -277,8 +277,17 @@ static void wireless_prime_sta_config(void)
 {
     char ssid[33] = {};
     char pass[65] = {};
-    if (!modulus_nvs_get_str("wf_ssid", ssid, sizeof(ssid)) || !ssid[0]) {
-        /* No saved STA — skip RPC set_config during boot (ESP-NOW / idle). */
+    if (modulus_nvs_get_u8("wifi", 0) == 0 ||
+        !modulus_nvs_get_str("wf_ssid", ssid, sizeof(ssid)) || !ssid[0]) {
+        /* P4 full-flash/NVS erase does not erase the separate C6 flash. Clear
+         * any stale C6 STA credentials explicitly, otherwise esp_wifi_start()
+         * can keep pulling the shared PHY back to an old AP channel while the
+         * Tab5 UI correctly says Wi-Fi is off. */
+        wifi_config_t empty = {};
+        esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &empty);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "clear stale C6 STA config: %s", esp_err_to_name(err));
+        }
         return;
     }
     wifi_config_t cfg = {};
@@ -477,6 +486,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_i
                 s_user_disconnect = true;
                 (void)esp_wifi_disconnect();
                 break;
+            }
+            if (ev && ev->channel >= 1 && ev->channel <= 13) {
+                modulus_nvs_set_u8("wf_chan", ev->channel);
             }
             modulus_wireless_espnow_check_channel_conflict();
             break;
@@ -753,13 +765,10 @@ void modulus_wireless_restore_settings(void)
             }
         }
         if (espnow_on) {
-            if (modulus_wireless_espnow_enable()) {
-                /* Also make an unattended/recovered unit discoverable: the S3
-                 * may have moved channels while the Tab5 was off.  The scan
-                 * worker is asynchronous and refuses to run when the CNC
-                 * transport is already open. */
-                (void)modulus_wireless_espnow_scan_start();
-            }
+            /* Fixed-channel architecture: restoring ESP-NOW must never start
+             * an autonomous sweep. Discovery is an explicit user action; all
+             * operational channel changes are commanded by Tab5 to the S3. */
+            (void)modulus_wireless_espnow_enable();
         }
     }
     if (modulus_nvs_get_u8("thread", 0) != 0 && modulus_wireless_thread_supported()) {
@@ -946,6 +955,10 @@ bool modulus_wireless_wifi_enable(void)
 
 void modulus_wireless_wifi_disable(void)
 {
+    if (modulus_wireless_espnow_is_enabled() &&
+        !modulus_wireless_espnow_move_bridge_channel(1)) {
+        ESP_LOGW(TAG, "S3 channel-1 command failed before Wi-Fi off");
+    }
     taskENTER_CRITICAL(&s_wifi_mux);
     s_wifi_requested = false;
     taskEXIT_CRITICAL(&s_wifi_mux);
@@ -1172,6 +1185,29 @@ bool modulus_wireless_wifi_connect(const char *ssid, const char *pass)
     if (!wireless_ensure_wifi_stack_started()) {
         return false;
     }
+
+    /* ESP-NOW shares the C6 PHY with Wi-Fi. Move the bridge while both ends
+     * are still reachable on the old channel, before association moves C6 to
+     * the AP channel. Prefer the fresh scan result; saved auto-connect uses
+     * the AP channel learned during the preceding successful connection. */
+    uint8_t target_channel = 0;
+    taskENTER_CRITICAL(&s_wifi_mux);
+    for (int i = 0; i < s_scan_n; i++) {
+        if (strcmp(s_scan_buf[i].ssid, ssid) == 0) {
+            target_channel = s_scan_buf[i].channel;
+            break;
+        }
+    }
+    taskEXIT_CRITICAL(&s_wifi_mux);
+    if (target_channel < 1 || target_channel > 13) {
+        target_channel = modulus_nvs_get_u8("wf_chan", 0);
+    }
+    if (modulus_wireless_espnow_is_enabled() && target_channel >= 1 && target_channel <= 13 &&
+        !modulus_wireless_espnow_move_bridge_channel(target_channel)) {
+        ESP_LOGE(TAG, "Wi-Fi connect blocked: S3 did not accept channel %u",
+                 (unsigned)target_channel);
+        return false;
+    }
     s_user_disconnect = false;
     taskENTER_CRITICAL(&s_wifi_mux);
     s_wifi_requested = true;
@@ -1220,6 +1256,11 @@ bool modulus_wireless_wifi_connect_saved(void)
 
 bool modulus_wireless_wifi_disconnect(void)
 {
+    if (modulus_wireless_espnow_is_enabled() &&
+        !modulus_wireless_espnow_move_bridge_channel(1)) {
+        ESP_LOGW(TAG, "S3 channel-1 command failed before Wi-Fi disconnect");
+        return false;
+    }
     s_user_disconnect = true;
     taskENTER_CRITICAL(&s_wifi_mux);
     s_wifi_connected = false;

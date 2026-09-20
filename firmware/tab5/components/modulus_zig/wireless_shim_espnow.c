@@ -43,14 +43,21 @@ static int s_scan_n;
  * announce where it parked, so probing only {en_chan,1,6,11} leaves a bridge on
  * ch3/4/5/... permanently undiscoverable. 13 x 250 ms fits inside the window. */
 #define MODULUS_ESPNOW_CHANNEL_MAX 13
-#define ESPNOW_SCAN_WINDOW_MS 5000
+#define ESPNOW_SCAN_WINDOW_MS 8000
 #define ESPNOW_SCAN_DWELL_MS  250
+#define ESPNOW_SCAN_SWEEPS     2
+#define BRIDGE_MOD_CHANNEL_LEN  7
 
 /* Channel the sweep is probing right now (0 = use configured en_chan). */
 static uint8_t s_scan_probe_ch;
 
 /* RAM mirror of en_chan — never read NVS from SDIO RX / espnow_stack_evt (lock abort). */
 static uint8_t s_bridge_ch_cached;
+static bool s_applied_valid;
+
+static bool mac_is_broadcast(const uint8_t mac[6]);
+static bool espnow_add_peer_wait(const uint8_t mac[6], uint8_t ch, bool encrypt,
+                                 uint32_t timeout_ms);
 
 static uint8_t espnow_channel_from_nvs(void)
 {
@@ -75,13 +82,64 @@ void modulus_wireless_espnow_set_channel(uint8_t channel)
     modulus_nvs_set_u8("en_chan", (uint8_t)(channel - 1));
 }
 
+bool modulus_wireless_espnow_move_bridge_channel(uint8_t channel)
+{
+    if (channel < 1 || channel > MODULUS_ESPNOW_CHANNEL_MAX) {
+        return false;
+    }
+    const uint8_t old_channel = modulus_wireless_espnow_channel();
+    if (channel == old_channel) {
+        if (s_espnow_on && modulus_espnow_stack_inited()) {
+            (void)modulus_espnow_stack_lock_channel(channel);
+        }
+        return true;
+    }
+
+    uint8_t peer[6];
+    char mac[20];
+    modulus_wireless_espnow_peer_mac_str(mac, sizeof(mac));
+    const bool have_peer = modulus_wireless_espnow_parse_mac(mac, peer) &&
+                           !mac_is_broadcast(peer);
+    if (s_espnow_on && have_peer) {
+        /* The command must leave on the old shared channel. S3 replies there
+         * before it applies the new channel. A MAC ACK proves the command
+         * reached the bridge; the short delay lets its application ACK and
+         * deferred NVS update complete before C6 moves. */
+        if (!modulus_espnow_stack_lock_channel(old_channel) ||
+            !espnow_add_peer_wait(peer, old_channel, false, 600)) {
+            modulus_espnow_debug_event("chan", "cannot prepare S3 move ch%u->ch%u",
+                                       (unsigned)old_channel, (unsigned)channel);
+            return false;
+        }
+        uint8_t command[BRIDGE_MOD_CHANNEL_LEN] = {'M','O','D','_','C','H', channel};
+        if (!modulus_espnow_stack_send_discovery(peer, command, sizeof(command))) {
+            modulus_espnow_debug_event("chan", "S3 move ch%u->ch%u not acknowledged",
+                                       (unsigned)old_channel, (unsigned)channel);
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+
+    modulus_wireless_espnow_set_channel(channel);
+    if (s_espnow_on && modulus_espnow_stack_inited()) {
+        if (!modulus_espnow_stack_lock_channel(channel)) {
+            return false;
+        }
+        if (have_peer) {
+            (void)espnow_add_peer_wait(peer, channel, false, 600);
+        }
+    }
+    s_applied_valid = false;
+    s_bridge_ok = false;
+    modulus_espnow_debug_event("chan", "Tab5 master channel %u", (unsigned)channel);
+    return true;
+}
+
 static SemaphoreHandle_t s_peer_sem;
 static volatile bool s_peer_wait_ok;
 static volatile bool s_peer_wait_armed;
 
 static bool espnow_add_peer_wait(const uint8_t mac[6], uint8_t ch, bool encrypt, uint32_t timeout_ms);
-static bool espnow_ping_locate_peer(const uint8_t peer[6], uint8_t *found_ch);
-
 static bool espnow_apply_bridge_peer_ex(bool locate_if_dark);
 /** Configured channel only — safe for boot / SDIO (no channel sweep). */
 static bool espnow_apply_bridge_peer(void);
@@ -242,7 +300,6 @@ static void espnow_scan_finish_radio(void)
 
 static uint8_t s_applied_mac[6];
 static uint8_t s_applied_ch;
-static bool s_applied_valid;
 
 void modulus_wireless_espnow_check_channel_conflict(void)
 {
@@ -257,15 +314,16 @@ void modulus_wireless_espnow_check_channel_conflict(void)
     if (ap.primary == bridge_ch) {
         return;
     }
-    /* A connected STA owns the radio channel.  New S3 firmware hunts for the
-     * Tab5 and latches this channel, so make the effective value and UI agree
-     * with the actual AP channel instead of retaining an impossible setting. */
+    /* A connected STA owns the radio channel. Normally the master handoff ran
+     * before association. Reaching this branch means the AP channel changed or
+     * was unknown; persist reality and report the missed handoff. The S3 never
+     * hunts, so the UI must not claim that it will recover by itself. */
     modulus_wireless_espnow_set_channel(ap.primary);
     s_applied_valid = false;
     s_bridge_ok = false;
-    modulus_espnow_debug_event("chan", "follow AP ch%u (was ch%u)",
+    modulus_espnow_debug_event("chan", "AP moved to ch%u; S3 remained ch%u",
                                (unsigned)ap.primary, (unsigned)bridge_ch);
-    ESP_LOGW(TAG, "ESP-NOW follows Wi-Fi AP channel %u (was %u); S3 will reacquire",
+    ESP_LOGW(TAG, "Wi-Fi AP is channel %u but S3 handoff from channel %u was missed",
              (unsigned)ap.primary, (unsigned)bridge_ch);
 }
 
@@ -317,6 +375,16 @@ static int espnow_channel_candidates(uint8_t *out, int cap)
 static bool espnow_verify_peer_air(const uint8_t mac[6], uint8_t ch)
 {
     static const uint8_t k_probe[] = "MOD_PROBE";
+    /* A peer's configured channel does not retune the C6 radio. Explicitly
+     * lock the radio before probing, otherwise a locally accepted peer can be
+     * tested on whatever channel a prior scan left behind. A connected STA
+     * owns the PHY channel; check_channel_conflict updates en_chan to it. */
+    modulus_wireless_espnow_check_channel_conflict();
+    ch = modulus_wireless_espnow_channel();
+    if (!modulus_wireless_wifi_is_connected() &&
+        !modulus_espnow_stack_lock_channel(ch)) {
+        return false;
+    }
     if (!espnow_add_peer_wait(mac, ch, false, 600)) {
         return false;
     }
@@ -524,8 +592,6 @@ static bool espnow_apply_bridge_peer_ex(bool locate_if_dark)
     modulus_espnow_debug_event("bridge", "apply peer %s ch%u", mac_str, (unsigned)ch);
 
     s_bridge_ok = false;
-    uint8_t live_ch = ch;
-
     if (!locate_if_dark) {
         /* Adding a peer only configures the C6.  Require a real MAC-layer ACK
          * before advertising the S3 as live in the status bar. */
@@ -540,15 +606,11 @@ static bool espnow_apply_bridge_peer_ex(bool locate_if_dark)
             return false;
         }
         ESP_LOGI(TAG, "Bridge peer %s ch%u (verified)", mac_str, (unsigned)ch);
-    } else if (!espnow_verify_peer_air(mac, ch) &&
-               !espnow_ping_locate_peer(mac, &live_ch)) {
-        modulus_espnow_debug_event("bridge", "peer dark on all channels");
-        ESP_LOGW(TAG, "Bridge %s not reachable (check S3 power + channel)", mac_str);
+    } else if (!espnow_verify_peer_air(mac, ch)) {
+        modulus_espnow_debug_event("bridge", "peer dark on fixed ch%u", (unsigned)ch);
+        ESP_LOGW(TAG, "Bridge %s not reachable on fixed channel %u", mac_str,
+                 (unsigned)ch);
         return false;
-    } else if (live_ch != ch && live_ch >= 1 && live_ch <= 13) {
-        ch = live_ch;
-        modulus_wireless_espnow_set_channel(ch);
-        ESP_LOGI(TAG, "Bridge peer %s ch%u (located)", mac_str, (unsigned)ch);
     } else {
         ESP_LOGI(TAG, "Bridge peer %s ch%u", mac_str, (unsigned)ch);
     }
@@ -653,7 +715,12 @@ bool modulus_wireless_espnow_is_enabled(void)
 
 bool modulus_wireless_espnow_bridge_ready(void)
 {
-    return s_espnow_on && s_bridge_ok;
+    if (!s_espnow_on || !s_bridge_ok || s_last_bridge_rx_tick == 0) {
+        return false;
+    }
+    /* S3 emits a heartbeat every 2 s.  Three missed heartbeats are enough to
+     * remove the green UI state; an open transport alone is not connectivity. */
+    return (xTaskGetTickCount() - s_last_bridge_rx_tick) <= pdMS_TO_TICKS(6000);
 }
 
 void modulus_wireless_espnow_peer_mac_str(char *buf, size_t len)
@@ -841,7 +908,7 @@ const char *modulus_wireless_espnow_bridge_text(void)
     if (!modulus_wireless_espnow_parse_mac(mac, raw) || mac_is_broadcast(raw)) {
         return "No bridge peer";
     }
-    if (s_bridge_ok) {
+    if (modulus_wireless_espnow_bridge_ready()) {
         if (espnow_cnc_transport_selected() && modulus_espnow_transport_is_open()) {
             snprintf(buf, sizeof(buf), "%.17s CNC live", mac);
         } else if (espnow_cnc_transport_selected()) {
@@ -988,7 +1055,7 @@ static void espnow_scan_worker(void *arg)
 
     const int probe_n = modulus_wireless_wifi_is_connected()
                             ? (ESPNOW_SCAN_WINDOW_MS / ESPNOW_SCAN_DWELL_MS)
-                            : sweep_n;
+                            : (sweep_n * ESPNOW_SCAN_SWEEPS);
     for (int i = 0; i < probe_n; i++) {
         const int si = i % sweep_n;
         s_scan_probe_ch = sweep[si];
@@ -1075,7 +1142,9 @@ bool modulus_wireless_espnow_scan_start(void)
     s_scan_done = false;
     s_scan_n = 0;
     s_scan_err[0] = '\0';
-    /* Must outlast the full 13-channel sweep (13 x ESPNOW_SCAN_DWELL_MS). */
+    /* Covers two complete sweeps. The S3 hops independently at a different
+     * cadence, so a second pass prevents an unlucky phase from missing every
+     * probe during the only pass. */
     s_scan_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(ESPNOW_SCAN_WINDOW_MS);
     taskEXIT_CRITICAL(&s_en_mux);
 
@@ -1147,10 +1216,11 @@ bool modulus_wireless_espnow_select_scan_peer(int idx)
      * saved MAC is unreachable. A STA link owns the PHY channel, so skip then. */
     if (peer.channel >= 1 && peer.channel <= 13 && !modulus_wireless_wifi_is_connected()) {
         if (modulus_wireless_espnow_channel() != peer.channel) {
-            modulus_wireless_espnow_set_channel(peer.channel);
+            if (!modulus_wireless_espnow_move_bridge_channel(peer.channel)) {
+                return false;
+            }
             s_applied_valid = false;
             s_bridge_ok = false;
-            (void)modulus_espnow_stack_lock_channel(peer.channel);
             ESP_LOGI(TAG, "ESP-NOW channel follows discovered peer ch%u",
                      (unsigned)peer.channel);
         }
@@ -1278,52 +1348,6 @@ static bool boot_reconnect_wanted(void)
         return true;
     }
     return modulus_nvs_get_u8("cnc_conn", 4) == 0;
-}
-
-/* en_chan drifts (manual change, bridge reconfigured) and a saved peer only
- * answers on its own channel, so a failed probe means "wrong channel" at least
- * as often as it means "absent". Retry across the channels before declaring the
- * bridge dark. Returns the channel that answered. */
-static bool espnow_ping_locate_peer(const uint8_t peer[6], uint8_t *found_ch)
-{
-    /* MOD_PROBE, not a private "MOD_PING": the S3 only special-cases PROBE /
-     * HALT and forwards every other payload straight to grblHAL, so a bespoke
-     * liveness word gets injected into the CNC serial stream as garbage. PROBE
-     * also makes the bridge re-learn our MAC, which the S3->Tab5 path needs. */
-    static const uint8_t k_probe[] = "MOD_PROBE";
-    uint8_t sweep[MODULUS_ESPNOW_CHANNEL_MAX];
-    int n = 1;
-    sweep[0] = modulus_wireless_espnow_channel();
-    if (!modulus_wireless_wifi_is_connected()) {
-        n = espnow_channel_candidates(sweep, (int)sizeof(sweep));
-        /* ponytail: 13-ch sweep when S3 is dark hammers SDIO → 0x107 / Core abort */
-        if (n > 2) {
-            n = 2;
-        }
-    }
-    int dark_streak = 0;
-    for (int i = 0; i < n; i++) {
-        if (!modulus_c6_sdio_ready() || !modulus_wireless_transport_up()) {
-            ESP_LOGW(TAG, "SDIO down — abort ESP-NOW channel locate");
-            return false;
-        }
-        if (!espnow_add_peer_wait(peer, sweep[i], false, 600)) {
-            continue;
-        }
-        if (modulus_espnow_stack_send_discovery(peer, k_probe, sizeof(k_probe) - 1)) {
-            *found_ch = sweep[i];
-            return true;
-        }
-        if (modulus_espnow_stack_last_send_fail_reason() == 0x01) {
-            if (++dark_streak >= 2) {
-                return false;
-            }
-        } else {
-            dark_streak = 0;
-        }
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
-    return false;
 }
 
 static bool boot_reconnect_once(const char *phase)

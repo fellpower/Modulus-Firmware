@@ -60,7 +60,7 @@ lv_color_t bar_wireless_wifi_color(uint8_t st);
 /** BLE: 0=hidden, 1=idle, 2=connecting, 3=connected. */
 uint8_t bar_wireless_ble_state(void);
 lv_color_t bar_wireless_ble_color(uint8_t st);
-/** ESP-NOW: 0=hidden, 1=enabled, 2=transport active. */
+/** ESP-NOW: 0=hidden, 1=enabled, 2=live bridge, 3=open but bridge stale. */
 uint8_t bar_wireless_espnow_state(void);
 lv_color_t bar_wireless_espnow_color(uint8_t st);
 void bar_update_wireless(status_bar_t *bar, uint8_t *wifi_st, uint8_t *ble_st, uint8_t *en_st,

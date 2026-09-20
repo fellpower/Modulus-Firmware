@@ -6,7 +6,7 @@
 param(
     [ValidateSet("build", "flash", "monitor", "fullclean", "set-target", "flash-monitor")]
     [string]$Action = "build",
-    [ValidateSet("mini1", "xiao")]
+    [ValidateSet("mini1", "xiao", "generic")]
     [string]$Board = "mini1",
     [string]$Port = "COM8",
     [string]$IdfPath = ""
@@ -19,6 +19,9 @@ $S3Dir = Join-Path $RepoRoot "firmware\s3-bridge"
 function Get-IdfDefaultsArgs {
     if ($Board -eq "xiao") {
         return @("-D", "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.xiao")
+    }
+    if ($Board -eq "generic") {
+        return @("-D", "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.defaults.generic")
     }
     return @()
 }
@@ -77,6 +80,11 @@ try {
                 $cfg = Get-Content "sdkconfig" -Raw
                 if ($cfg -notmatch "CONFIG_S3_BRIDGE_BOARD_XIAO=y") {
                     Write-Error "sdkconfig is not XIAO. Run: .\scripts\build_s3_bridge.ps1 -Board xiao -Action fullclean"
+                }
+            } elseif ($Board -eq "generic") {
+                $cfg = Get-Content "sdkconfig" -Raw
+                if ($cfg -notmatch "CONFIG_S3_BRIDGE_BOARD_GENERIC=y") {
+                    Write-Error "sdkconfig is not Generic. Run: .\scripts\build_s3_bridge.ps1 -Board generic -Action fullclean"
                 }
             }
             idf.py @IdfDefaults build

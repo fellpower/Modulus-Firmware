@@ -49,6 +49,9 @@ static int default_idx(void)
 #if CONFIG_S3_BRIDGE_BOARD_XIAO
     int i = find_s3("xiao");
     return i >= 0 ? i : 0;
+#elif CONFIG_S3_BRIDGE_BOARD_GENERIC
+    int i = find_s3("s3-supermini");
+    return i >= 0 ? i : 0;
 #else
     int i = find_s3("mini1");
     return i >= 0 ? i : 0;

@@ -38,6 +38,13 @@ uint32_t espnow_outbound_drops();
 uint32_t espnow_outbound_pending();
 bool     espnow_channel_hunting();
 uint32_t espnow_last_link_age_ms();
+uint32_t espnow_last_rx_age_ms();
+uint32_t espnow_last_tx_ok_age_ms();
+uint32_t espnow_air_rx_count();
+void     espnow_trace_set(bool enabled);
+bool     espnow_trace_enabled();
+void     espnow_log_print();
+void     espnow_log_clear();
 
 #ifdef __cplusplus
 }

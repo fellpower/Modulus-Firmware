@@ -760,11 +760,12 @@ bool modulus_espnow_transport_start(const char *mac_str, uint8_t channel, bool e
             return false;
         }
     }
-    modulus_wireless_espnow_apply_bridge_peer();
     if (channel > 0) {
         modulus_wireless_espnow_set_channel(channel);
         (void)modulus_espnow_stack_lock_channel(channel);
     }
+    /* Apply/verify only after the C6 radio is on the requested channel. */
+    modulus_wireless_espnow_apply_bridge_peer();
     /* S3 UART bridge uses plain ESP-NOW — PMK encryption breaks CNC transport. */
     modulus_nvs_set_u8("en_enc", 0);
 

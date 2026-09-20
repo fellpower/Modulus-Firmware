@@ -49,9 +49,15 @@ void espnow_toggle_cb(lv_event_t *e)
 void dd_u8_cb(lv_event_t *e)
 {
     const char *key = lv_event_get_user_data(e);
-    modulus_nvs_set_u8(key, (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e)));
     if (strcmp(key, "en_chan") == 0) {
-        modulus_wireless_espnow_channel_reload();
+        const uint8_t channel = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e)) + 1;
+        if (!modulus_wireless_espnow_move_bridge_channel(channel)) {
+            modulus_audio_play_ui(MODULUS_UI_SOUND_DROP);
+            wl_rebuild();
+            return;
+        }
+    } else {
+        modulus_nvs_set_u8(key, (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e)));
     }
     if (strcmp(key, "en_chan") == 0 || strcmp(key, "en_rate") == 0) {
         wl_maybe_reinit_espnow_transport();

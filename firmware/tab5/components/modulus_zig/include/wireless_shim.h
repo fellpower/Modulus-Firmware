@@ -106,6 +106,8 @@ void modulus_wireless_espnow_format_mac(const uint8_t mac[6], char *buf, size_t 
 uint8_t modulus_wireless_espnow_channel(void);
 /** Persist bridge channel (1–13) to RAM + NVS — safe from SDIO RX context. */
 void modulus_wireless_espnow_set_channel(uint8_t channel);
+/** Tell the paired S3 to move first, then persist and lock the C6 channel. */
+bool modulus_wireless_espnow_move_bridge_channel(uint8_t channel);
 /** Reload channel cache after external NVS writes (settings dropdown). */
 void modulus_wireless_espnow_channel_reload(void);
 

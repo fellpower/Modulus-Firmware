@@ -338,6 +338,11 @@ static void uart_rx_task(void* arg)
         }
         activity_led_pulse_rx();
         (void)espnow_queue_to_tab5(buf, static_cast<size_t>(n));
+
+        /* A noisy/floating RX pin can keep UART_DATA ready continuously. This
+         * task runs above the idle task, so yield for one tick after every
+         * drained batch to keep the Core 1 watchdog fed under an RX storm. */
+        vTaskDelay(1);
     }
 }
 

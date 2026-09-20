@@ -15,15 +15,18 @@
 #include <atomic>
 #include <cstring>
 #include <cstdio>
+#include <cstdarg>
 
 #include <esp_mac.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <driver/usb_serial_jtag.h>
 
 static const char* TAG = "espnow";
 
@@ -55,14 +58,41 @@ static QueueHandle_t         s_outbound_q = nullptr;
 static bool                  s_inbound_worker_started = false;
 static bool                  s_outbound_worker_started = false;
 static bool                  s_heartbeat_task_started = false;
-static bool                  s_channel_hunt_task_started = false;
 static std::atomic<bool>     s_channel_hunting{false};
 static std::atomic<bool>     s_channel_latch_pending{false};
 static std::atomic<uint32_t> s_last_link_ok_tick{0};
+static std::atomic<uint32_t> s_last_rx_tick{0};
+static std::atomic<uint32_t> s_last_tx_ok_tick{0};
+static std::atomic<uint32_t> s_last_tx_fail_tick{0};
+static std::atomic<uint32_t> s_air_rx_count{0};
+static std::atomic<uint32_t> s_hunt_hold_until_tick{0};
+static std::atomic<bool>     s_trace_enabled{false};
+static bool                  s_trace_task_started = false;
+static constexpr size_t      kLinkLogDepth = 60;
+/* Once a unicast MAC ACK or an inbound frame proves the Tab5 channel, keep
+ * the radio there long enough for both 2 s heartbeats and the Tab5 liveness
+ * probe to reinforce the lock.  The former 5 s timeout made both ends resume
+ * independent channel hopping after a single missed heartbeat. */
+static constexpr uint32_t    kConfirmedChannelHoldMs = 30000;
+typedef struct {
+    uint32_t ms, link_age, rx_age, tx_age;
+    uint32_t air_rx, tx_ok, fail;
+    uint8_t configured_channel, radio_channel;
+    bool hunting;
+} link_log_entry_t;
+static link_log_entry_t      s_link_log[kLinkLogDepth] = {};
+static size_t                s_link_log_head = 0;
+static size_t                s_link_log_count = 0;
+static portMUX_TYPE          s_link_log_spin = portMUX_INITIALIZER_UNLOCKED;
 /* MOD_ACK / peer learn must not block inside esp_now recv cb. */
 static portMUX_TYPE          s_ack_spin = portMUX_INITIALIZER_UNLOCKED;
 static bool                  s_ack_pending = false;
 static uint8_t               s_ack_mac[6] = {};
+static bool                  s_channel_cmd_pending = false;
+static uint8_t               s_channel_cmd_mac[6] = {};
+static uint8_t               s_channel_cmd_target = 0;
+static void request_channel_change(const uint8_t* dest_mac, uint8_t channel);
+static void flush_pending_channel_change(void);
 static portMUX_TYPE          s_learn_spin = portMUX_INITIALIZER_UNLOCKED;
 static bool                  s_learn_pending = false;
 static uint8_t               s_learn_mac[6] = {};
@@ -287,6 +317,7 @@ static void inbound_worker(void*)
     for (;;) {
         apply_deferred_learn();
         flush_pending_mod_ack();
+        flush_pending_channel_change();
         if (xQueueReceive(s_inbound_q, &pkt, pdMS_TO_TICKS(20)) == pdTRUE) {
             uart_bridge_send(pkt.data, pkt.len);
         }
@@ -299,6 +330,7 @@ static void outbound_worker(void*)
     for (;;) {
         apply_deferred_learn();
         flush_pending_mod_ack();
+        flush_pending_channel_change();
         if (xQueueReceive(s_outbound_q, &pkt, pdMS_TO_TICKS(20)) == pdTRUE) {
             (void)espnow_send_to_tab5(pkt.data, pkt.len);
         }
@@ -312,7 +344,12 @@ static void on_recv(const esp_now_recv_info_t* info,
         return;
     }
 
-    s_last_link_ok_tick.store((uint32_t)xTaskGetTickCount(), std::memory_order_release);
+    const uint32_t rx_tick = (uint32_t)xTaskGetTickCount();
+    s_air_rx_count.fetch_add(1, std::memory_order_relaxed);
+    s_last_rx_tick.store(rx_tick, std::memory_order_release);
+    s_last_link_ok_tick.store(rx_tick, std::memory_order_release);
+    s_hunt_hold_until_tick.store(rx_tick + pdMS_TO_TICKS(kConfirmedChannelHoldMs),
+                                 std::memory_order_release);
     if (s_channel_hunting.exchange(false, std::memory_order_acq_rel)) {
         s_channel_latch_pending.store(true, std::memory_order_release);
     }
@@ -343,6 +380,15 @@ static void on_recv(const esp_now_recv_info_t* info,
         return;
     }
 
+    if (len == BRIDGE_MOD_CHANNEL_LEN &&
+        memcmp(data, BRIDGE_MOD_CHANNEL, BRIDGE_MOD_CHANNEL_LEN - 1) == 0 &&
+        data[BRIDGE_MOD_CHANNEL_LEN - 1] >= kChannelMin &&
+        data[BRIDGE_MOD_CHANNEL_LEN - 1] <= kChannelMax) {
+        defer_learn_mac(info->src_addr);
+        request_channel_change(info->src_addr, data[BRIDGE_MOD_CHANNEL_LEN - 1]);
+        return;
+    }
+
     defer_learn_mac(info->src_addr);
 
     s_rx_count.fetch_add(1, std::memory_order_relaxed);
@@ -355,12 +401,22 @@ static void on_recv(const esp_now_recv_info_t* info,
 
 static void on_sent(const esp_now_send_info_t* info, esp_now_send_status_t status)
 {
+    const bool broadcast = info && memcmp(info->des_addr, kBroadcastMac, 6) == 0;
     if (status == ESP_NOW_SEND_SUCCESS) {
-        s_tx_count.fetch_add(1, std::memory_order_relaxed);
+        /* A broadcast has no receiver ACK. Its send callback only means that
+         * the frame left our radio, so it must not be reported as a healthy
+         * Tab5 transmission. */
+        if (!broadcast) {
+            s_tx_count.fetch_add(1, std::memory_order_relaxed);
+        }
         const bool tab5_unicast = info && s_tab5_known &&
                                   memcmp(info->des_addr, s_tab5_mac, 6) == 0;
         if (tab5_unicast) {
-            s_last_link_ok_tick.store((uint32_t)xTaskGetTickCount(), std::memory_order_release);
+            const uint32_t tx_tick = (uint32_t)xTaskGetTickCount();
+            s_last_tx_ok_tick.store(tx_tick, std::memory_order_release);
+            s_last_link_ok_tick.store(tx_tick, std::memory_order_release);
+            s_hunt_hold_until_tick.store(tx_tick + pdMS_TO_TICKS(kConfirmedChannelHoldMs),
+                                         std::memory_order_release);
         }
         if (tab5_unicast && s_channel_hunting.exchange(false, std::memory_order_acq_rel)) {
             /* Persist a channel found by an outbound hunt as well as one found
@@ -368,8 +424,9 @@ static void on_sent(const esp_now_send_info_t* info, esp_now_send_status_t statu
             s_channel_latch_pending.store(true, std::memory_order_release);
             defer_learn_mac(info->des_addr);
         }
-    } else {
+    } else if (!broadcast) {
         s_fail_count.fetch_add(1, std::memory_order_relaxed);
+        s_last_tx_fail_tick.store((uint32_t)xTaskGetTickCount(), std::memory_order_release);
         if (info) {
             ESP_LOGD(TAG, "TX failed to %02X:%02X:%02X:%02X:%02X:%02X",
                      info->des_addr[0], info->des_addr[1], info->des_addr[2],
@@ -511,36 +568,93 @@ static void heartbeat_task(void*)
     }
 }
 
-static void channel_hunt_task(void*)
+static void request_channel_change(const uint8_t* dest_mac, uint8_t channel)
 {
-    uint8_t candidate = s_channel;
-    for (;;) {
-        const uint32_t now = (uint32_t)xTaskGetTickCount();
-        const uint32_t last = s_last_link_ok_tick.load(std::memory_order_acquire);
-        if ((uint32_t)(now - last) < pdMS_TO_TICKS(5000)) {
-            s_channel_hunting.store(false, std::memory_order_release);
-            vTaskDelay(pdMS_TO_TICKS(250));
-            continue;
-        }
+    taskENTER_CRITICAL(&s_ack_spin);
+    memcpy(s_channel_cmd_mac, dest_mac, 6);
+    s_channel_cmd_target = channel;
+    s_channel_cmd_pending = true;
+    taskEXIT_CRITICAL(&s_ack_spin);
+}
 
-        s_channel_hunting.store(true, std::memory_order_release);
-        candidate = candidate >= kChannelMax ? kChannelMin : (uint8_t)(candidate + 1);
-        /* Do not move the radio while another task waits for an ESP-NOW TX
-         * callback. Channel hunting must never corrupt normal CNC traffic. */
-        if (xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
-            if (esp_wifi_set_channel(candidate, WIFI_SECOND_CHAN_NONE) == ESP_OK) {
-                s_channel = candidate;
-            }
-            xSemaphoreGive(s_tx_lock);
+static void flush_pending_channel_change(void)
+{
+    uint8_t mac[6];
+    uint8_t channel = 0;
+    bool pending = false;
+    taskENTER_CRITICAL(&s_ack_spin);
+    if (s_channel_cmd_pending) {
+        memcpy(mac, s_channel_cmd_mac, 6);
+        channel = s_channel_cmd_target;
+        s_channel_cmd_pending = false;
+        pending = true;
+    }
+    taskEXIT_CRITICAL(&s_ack_spin);
+    if (!pending) return;
+
+    uint8_t ack[BRIDGE_MOD_CHANNEL_LEN] = {'M','O','D','_','C','A',0};
+    ack[BRIDGE_MOD_CHANNEL_LEN - 1] = channel;
+    if (!espnow_send_chunk(mac, ack, sizeof(ack))) {
+        ESP_LOGW(TAG, "channel %u ACK failed; staying on channel %u",
+                 (unsigned)channel, (unsigned)s_channel);
+        return;
+    }
+
+    if (espnow_set_channel(channel)) {
+        ESP_LOGI(TAG, "Tab5 commanded channel %u", (unsigned)channel);
+    } else {
+        ESP_LOGW(TAG, "channel command apply failed: %u", (unsigned)channel);
+    }
+}
+
+static uint32_t age_ms(std::atomic<uint32_t>& tick)
+{
+    const uint32_t last = tick.load(std::memory_order_acquire);
+    if (last == 0) return UINT32_MAX;
+    return (uint32_t)(xTaskGetTickCount() - last) * portTICK_PERIOD_MS;
+}
+
+static void link_console_printf(const char* fmt, ...);
+
+static void trace_task(void*)
+{
+    uint32_t prev_rx = 0, prev_tx = 0, prev_fail = 0;
+    for (;;) {
+        uint8_t actual = 0;
+        wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+        (void)esp_wifi_get_channel(&actual, &second);
+        const uint32_t rx = s_air_rx_count.load(std::memory_order_relaxed);
+        const uint32_t tx = s_tx_count.load(std::memory_order_relaxed);
+        const uint32_t fail = s_fail_count.load(std::memory_order_relaxed);
+        link_log_entry_t entry = {
+            .ms = (uint32_t)(esp_timer_get_time() / 1000),
+            .link_age = age_ms(s_last_link_ok_tick),
+            .rx_age = age_ms(s_last_rx_tick),
+            .tx_age = age_ms(s_last_tx_ok_tick),
+            .air_rx = rx, .tx_ok = tx, .fail = fail,
+            .configured_channel = s_channel, .radio_channel = actual,
+            .hunting = s_channel_hunting.load(std::memory_order_acquire),
+        };
+        taskENTER_CRITICAL(&s_link_log_spin);
+        s_link_log[s_link_log_head] = entry;
+        s_link_log_head = (s_link_log_head + 1) % kLinkLogDepth;
+        if (s_link_log_count < kLinkLogDepth) ++s_link_log_count;
+        taskEXIT_CRITICAL(&s_link_log_spin);
+
+        if (s_trace_enabled.load(std::memory_order_acquire)) {
+            link_console_printf("\r\n[LINK %10llu ms] cfg=%u radio=%u hunt=%s link_age=%lu rx_age=%lu txok_age=%lu air_rx=%lu(+%lu) tx_ok=%lu(+%lu) fail=%lu(+%lu)\r\n> ",
+                   (unsigned long long)(esp_timer_get_time() / 1000),
+                   (unsigned)s_channel, (unsigned)actual,
+                   s_channel_hunting.load(std::memory_order_acquire) ? "yes" : "no",
+                   (unsigned long)age_ms(s_last_link_ok_tick),
+                   (unsigned long)age_ms(s_last_rx_tick),
+                   (unsigned long)age_ms(s_last_tx_ok_tick),
+                   (unsigned long)rx, (unsigned long)(rx - prev_rx),
+                   (unsigned long)tx, (unsigned long)(tx - prev_tx),
+                   (unsigned long)fail, (unsigned long)(fail - prev_fail));
+            prev_rx = rx; prev_tx = tx; prev_fail = fail;
         }
-        /* Probe the saved Tab5 on every candidate. A two-second heartbeat
-         * alone only overlaps one of thirteen short dwell windows by chance. */
-        static const uint8_t heartbeat[] = BRIDGE_MOD_HEARTBEAT;
-        (void)espnow_send_to_tab5(heartbeat, BRIDGE_MOD_HEARTBEAT_LEN);
-        (void)espnow_send_chunk(kBroadcastMac, heartbeat, BRIDGE_MOD_HEARTBEAT_LEN);
-        /* Tab5 repeats discovery on its AP channel for five seconds, so a
-         * 180 ms dwell guarantees several rendezvous opportunities. */
-        vTaskDelay(pdMS_TO_TICKS(180));
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 
@@ -564,12 +678,13 @@ void espnow_start_inbound_worker()
             ESP_LOGW(TAG, "heartbeat task create failed");
         }
     }
-    if (!s_channel_hunt_task_started) {
-        if (xTaskCreatePinnedToCore(channel_hunt_task, "espnow_hunt",
-                                    3072, nullptr, 4, nullptr, 1) == pdPASS) {
-            s_channel_hunt_task_started = true;
-        } else {
-            ESP_LOGW(TAG, "channel hunt task create failed");
+    /* Tab5 owns the radio channel. The S3 remains on its persisted channel
+     * until a MOD_CH command arrives and never hunts autonomously. */
+    s_channel_hunting.store(false, std::memory_order_release);
+    if (!s_trace_task_started) {
+        if (xTaskCreatePinnedToCore(trace_task, "espnow_trace",
+                                    3072, nullptr, 2, nullptr, 1) == pdPASS) {
+            s_trace_task_started = true;
         }
     }
 }
@@ -584,6 +699,14 @@ bool espnow_set_channel(uint8_t ch)
     }
 
     s_channel = ch;
+    /* A manual channel change invalidates the previous green/link state. Give
+     * the selected channel five seconds to receive a fresh ACK or RX before
+     * automatic hunting resumes. */
+    s_last_link_ok_tick.store(0, std::memory_order_release);
+    s_last_tx_ok_tick.store(0, std::memory_order_release);
+    s_channel_hunting.store(false, std::memory_order_release);
+    s_hunt_hold_until_tick.store((uint32_t)xTaskGetTickCount() + pdMS_TO_TICKS(5000),
+                                 std::memory_order_release);
     if (!save_channel_nvs(ch)) {
         ESP_LOGW(TAG, "channel NVS save failed (live ch=%d)", ch);
     }
@@ -673,6 +796,63 @@ bool espnow_channel_hunting()
 
 uint32_t espnow_last_link_age_ms()
 {
-    const uint32_t last = s_last_link_ok_tick.load(std::memory_order_acquire);
-    return (uint32_t)(xTaskGetTickCount() - last) * portTICK_PERIOD_MS;
+    return age_ms(s_last_link_ok_tick);
+}
+
+uint32_t espnow_last_rx_age_ms() { return age_ms(s_last_rx_tick); }
+uint32_t espnow_last_tx_ok_age_ms() { return age_ms(s_last_tx_ok_tick); }
+uint32_t espnow_air_rx_count() { return s_air_rx_count.load(std::memory_order_relaxed); }
+void espnow_trace_set(bool enabled) { s_trace_enabled.store(enabled, std::memory_order_release); }
+bool espnow_trace_enabled() { return s_trace_enabled.load(std::memory_order_acquire); }
+
+void espnow_log_clear()
+{
+    taskENTER_CRITICAL(&s_link_log_spin);
+    s_link_log_head = 0;
+    s_link_log_count = 0;
+    taskEXIT_CRITICAL(&s_link_log_spin);
+}
+
+static void link_console_printf(const char* fmt, ...)
+{
+    char line[192];
+    va_list args;
+    va_start(args, fmt);
+    const int n = vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+    if (n <= 0) return;
+    const size_t total = (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1;
+    size_t sent = 0;
+    while (sent < total) {
+        const int wrote = usb_serial_jtag_write_bytes(
+            line + sent, total - sent, pdMS_TO_TICKS(500));
+        if (wrote <= 0) break;
+        sent += (size_t)wrote;
+    }
+}
+
+void espnow_log_print()
+{
+    size_t count = 0;
+    size_t start = 0;
+    taskENTER_CRITICAL(&s_link_log_spin);
+    count = s_link_log_count;
+    start = (s_link_log_head + kLinkLogDepth - count) % kLinkLogDepth;
+    taskEXIT_CRITICAL(&s_link_log_spin);
+
+    link_console_printf("\r\n=== S3 LINK LOG (2 s samples, oldest first) ===\r\n");
+    link_console_printf(" ms       cfg radio hunt linkAge rxAge txAge airRX txOK fail\r\n");
+    for (size_t i = 0; i < count; ++i) {
+        link_log_entry_t e;
+        taskENTER_CRITICAL(&s_link_log_spin);
+        e = s_link_log[(start + i) % kLinkLogDepth];
+        taskEXIT_CRITICAL(&s_link_log_spin);
+        link_console_printf(" %8lu %3u %5u %4s %7lu %5lu %5lu %5lu %4lu %4lu\r\n",
+               (unsigned long)e.ms, (unsigned)e.configured_channel,
+               (unsigned)e.radio_channel, e.hunting ? "yes" : "no",
+               (unsigned long)e.link_age, (unsigned long)e.rx_age,
+               (unsigned long)e.tx_age, (unsigned long)e.air_rx,
+               (unsigned long)e.tx_ok, (unsigned long)e.fail);
+    }
+    link_console_printf("=== END S3 LINK LOG (%u samples) ===\r\n", (unsigned)count);
 }

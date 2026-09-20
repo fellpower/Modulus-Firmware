@@ -14,7 +14,11 @@
 
 # Modulus Firmware
 
-**Release:** v3.1.3-ota · **Branch:** `feature/tab5-ota` · **Lizenz:** [MIT](LICENSE)
+**Release:** v3.1.5-ota · **Branch:** `feature/tab5-ota` · **Lizenz:** [MIT](LICENSE)
+
+**Danksagung:** Besonderer Dank an **Sae** und **Miklos** für die wiederholten
+Tests der Tab5 ↔ S3-Funkverbindung und die Diagnose-Logs, die zur festen
+Kanalsteuerung geführt haben.
 
 Modulus macht das M5Stack Tab5 zum CNC-Pendant. Der P4 übernimmt Oberfläche und
 Steuerungslogik, der C6 WLAN und ESP-NOW. Eine S3-Bridge verbindet das Pendant mit

@@ -1,0 +1,7 @@
+# Generic ESP32-S3 Super Mini overlay:
+#   .\scripts\build_s3_bridge.ps1 -Board generic -Action fullclean
+#   .\scripts\build_s3_bridge.ps1 -Board generic
+
+CONFIG_S3_BRIDGE_BOARD_MINI1=n
+CONFIG_S3_BRIDGE_BOARD_XIAO=n
+CONFIG_S3_BRIDGE_BOARD_GENERIC=y

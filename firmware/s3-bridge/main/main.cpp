@@ -152,6 +152,9 @@ static void print_help()
     printf("  stats reset                  - clear traffic / fail counters\r\n");
     printf("  status                       - config, counters, link health\r\n");
     printf("  diag                         - copyable build/crash/link diagnostics\r\n");
+    printf("  trace on|off                 - live 2 s ESP-NOW channel/link log\r\n");
+    printf("  log                          - print saved ~2 min link history\r\n");
+    printf("  log clear                    - clear saved link history\r\n");
     printf("  coredump clear               - erase saved crash image after collection\r\n");
     printf("  help                         - this list\r\n\r\n");
 }
@@ -183,9 +186,13 @@ static void print_diag()
     printf("  Radio channel     : %u\r\n", (unsigned)primary);
     printf("  Channel hunting   : %s\r\n", espnow_channel_hunting() ? "yes" : "no");
     printf("  Last link age     : %lu ms\r\n", (unsigned long)espnow_last_link_age_ms());
+    printf("  Last RX/TX-ok age : %lu / %lu ms\r\n", (unsigned long)espnow_last_rx_age_ms(),
+           (unsigned long)espnow_last_tx_ok_age_ms());
     printf("  Tab5 MAC          : %s\r\n", espnow_tab5_mac_str());
     printf("  RX/TX/fail        : %lu / %lu / %lu\r\n", (unsigned long)espnow_rx_count(),
            (unsigned long)espnow_tx_count(), (unsigned long)espnow_fail_count());
+    printf("  All radio RX      : %lu (includes probes/control)\r\n",
+           (unsigned long)espnow_air_rx_count());
     printf("  Queue in/out/drop : %lu / %lu / %lu+%lu\r\n",
            (unsigned long)espnow_inbound_pending(), (unsigned long)espnow_outbound_pending(),
            (unsigned long)espnow_inbound_drops(), (unsigned long)espnow_outbound_drops());
@@ -225,9 +232,29 @@ static void handle_command(const char* line)
             return;
         }
         if (espnow_set_channel((uint8_t)ch)) {
-            printf("  Channel set to %d (live - Tab5 must match)\r\n", ch);
+            printf("  Channel set to %d; old link proof cleared, 5 s verify window\r\n", ch);
         } else {
             printf("  Error: failed to apply channel %d\r\n", ch);
+        }
+
+    } else if (strcmp(cmd, "trace") == 0) {
+        if (strcmp(arg, "on") == 0) {
+            espnow_trace_set(true);
+            printf("  Live link trace on (one line every 2 s)\r\n");
+        } else if (strcmp(arg, "off") == 0) {
+            espnow_trace_set(false);
+            printf("  Live link trace off\r\n");
+        } else {
+            printf("  Use: trace on|off (currently %s)\r\n",
+                   espnow_trace_enabled() ? "on" : "off");
+        }
+
+    } else if (strcmp(cmd, "log") == 0) {
+        if (strcmp(arg, "clear") == 0) {
+            espnow_log_clear();
+            printf("  Link history cleared\r\n");
+        } else {
+            espnow_log_print();
         }
 
     } else if (strcmp(cmd, "baud") == 0) {
@@ -342,12 +369,9 @@ static void shell_task(void* arg)
 
         if (ch == '\r' || ch == '\n') {
             if (pos == 0) {
-                /* A monitor attached after boot misses the one-time banner.
-                 * Empty Enter is therefore an intentional menu redraw. */
-                printf("\r\n");
-                print_help();
-                printf("> ");
-                fflush(stdout);
+                /* Most terminals send CRLF.  The CR already executed the
+                 * command; silently ignore the following LF instead of
+                 * flooding the console with a second help/menu block. */
                 continue;
             }
             line[pos] = '\0';

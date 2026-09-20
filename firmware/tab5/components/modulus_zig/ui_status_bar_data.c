@@ -200,7 +200,7 @@ uint8_t bar_wireless_espnow_state(void)
         return 0;
     }
     if (modulus_wireless_espnow_transport_active()) {
-        return 2;
+        return modulus_wireless_espnow_bridge_ready() ? 2 : 3;
     }
     if (modulus_wireless_espnow_is_enabled()) {
         return 1;
@@ -213,6 +213,8 @@ lv_color_t bar_wireless_espnow_color(uint8_t st)
     switch (st) {
     case 2:
         return modulus_ui_color_success();
+    case 3:
+        return modulus_ui_color_warning();
     case 1:
         return modulus_ui_color_icon_chrome();
     default:
