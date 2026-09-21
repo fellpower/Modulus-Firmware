@@ -14,7 +14,9 @@
 
 # Modulus Firmware
 
-**Release:** v3.1.5-ota · **Branch:** `feature/tab5-ota` · **Lizenz:** [MIT](LICENSE)
+**Release:** v3.1.6-ota · **Branch:** `feature/tab5-ota` · **Lizenz:** [MIT](LICENSE)
+
+**Community-Diskussion:** Im [Modulus-Thread auf Discord](https://discord.com/channels/648972213734604807/1540534494921105419) könnt ihr Fragen, Feedback und Erfahrungen zum Aufbau teilen.
 
 **Danksagung:** Besonderer Dank an **Sae** und **Miklos** für die wiederholten
 Tests der Tab5 ↔ S3-Funkverbindung und die Diagnose-Logs, die zur festen

@@ -16,12 +16,14 @@
 
 # Modulus Firmware
 
-**Version:** 3.1.5-ota<br>
+**Version:** 3.1.6-ota<br>
 **Author:** D. McLean / BufferRoot  
 **Platform:** M5Stack Tab5 (ESP32-P4 + ESP32-C6)  
 **Stack:** Zig 0.16 + ESP-IDF 6  
 **Hackster:** [Modulus pendant](https://www.hackster.io/BufferRoot/modulus-the-ultimate-universal-smart-cnc-pendant-2587ed) · [M5Stack GIC 2026](https://m5stack.com/global-innovation-contest-2026)  
 **License:** [MIT](LICENSE)
+
+**Community discussion:** Join the [Modulus discussion on Discord](https://discord.com/channels/648972213734604807/1540534494921105419) for questions, feedback and build experiences.
 
 **Thanks:** Special thanks to **Sae** and **Miklos** for repeatedly testing the
 Tab5 ↔ S3 radio link and providing the diagnostics that led to the fixed-channel design.
