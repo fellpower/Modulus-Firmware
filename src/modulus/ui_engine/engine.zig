@@ -95,6 +95,39 @@ pub const ui_engine_version: []const u8 = "V1.0";
 const boot_credit: []const u8 = "Driven by M5Stack | Powered by Zig | Built on ESP-IDF";
 const boot_ota_credit: []const u8 = "OTA VERSION BY FELLPOWER";
 
+fn zigbeeChannelGpioAllowed(gpio: u32) bool {
+    return gpio <= 2 or (gpio >= 16 and gpio <= 23);
+}
+
+fn xiaoDigitalPinToGpio(pin: u32) ?u32 {
+    const gpio = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
+    if (pin >= gpio.len) return null;
+    return gpio[pin];
+}
+
+fn xiaoGpioToDigitalPin(gpio: i8) ?u32 {
+    const pins = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
+    for (pins, 0..) |candidate, pin| if (gpio == candidate) return @intCast(pin);
+    return null;
+}
+
+fn zigbeeStatusLedGpioAllowed(gpio: u32) bool {
+    return gpio == 15 or zigbeeChannelGpioAllowed(gpio);
+}
+
+test "zigbee node GPIO choices match firmware safety rules" {
+    try std.testing.expect(zigbeeChannelGpioAllowed(0));
+    try std.testing.expect(zigbeeChannelGpioAllowed(2));
+    try std.testing.expect(zigbeeChannelGpioAllowed(16));
+    try std.testing.expect(zigbeeChannelGpioAllowed(23));
+    try std.testing.expect(!zigbeeChannelGpioAllowed(5));
+    try std.testing.expect(!zigbeeChannelGpioAllowed(15));
+    try std.testing.expect(zigbeeStatusLedGpioAllowed(15));
+    try std.testing.expectEqual(@as(?u32, 23), xiaoDigitalPinToGpio(5));
+    try std.testing.expectEqual(@as(?u32, 16), xiaoDigitalPinToGpio(6));
+    try std.testing.expectEqual(@as(?u32, 5), xiaoGpioToDigitalPin(23));
+}
+
 const FocusKind = enum { none, gear, power, search, close };
 
 /// Host-only `device_stub_px` rotate-cost model. Off by default: it re-rotates
@@ -3964,16 +3997,20 @@ pub const Engine = struct {
                     _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
                 }
             } else if (self.pad.parseU32()) |v| {
-                if (v > 30) {
-                    self.showSnackbarError("GPIO must be 0 to 30");
-                    return;
-                }
                 const i = self.zb_node_channel_idx;
                 if (i == 0xff) {
+                    if (!zigbeeStatusLedGpioAllowed(v)) {
+                        self.showSnackbarError("Use GPIO 0, 1, 2, 15-23");
+                        return;
+                    }
                     self.prefs.wireless.zb_node_led_gpio = @intCast(v);
                     _ = self.emitWireless(.{ .zb_node_status_led = .{ .gpio = @intCast(v), .flags = self.prefs.wireless.zb_node_led_flags } });
                 } else if (i < self.prefs.wireless.zb_node_channels.len) {
-                    self.prefs.wireless.zb_node_channels[i].gpio = @intCast(v);
+                    const gpio = xiaoDigitalPinToGpio(v) orelse {
+                        self.showSnackbarError("Use XIAO pin D0 to D10");
+                        return;
+                    };
+                    self.prefs.wireless.zb_node_channels[i].gpio = @intCast(gpio);
                     const ch = &self.prefs.wireless.zb_node_channels[i];
                     _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
                 }
@@ -5995,7 +6032,7 @@ pub const Engine = struct {
             .node_led_gpio => {
                 self.zb_node_channel_idx = 0xff;
                 const gpio = self.prefs.wireless.zb_node_led_gpio;
-                self.openNumberForTarget(.wl_zb_node_gpio, "LED GPIO 0-30 (empty = None)", if (gpio < 0) 0 else @intCast(gpio));
+                self.openNumberForTarget(.wl_zb_node_gpio, "LED GPIO: 0,1,2,15-23", if (gpio < 0) 0 else @intCast(gpio));
             },
             .node_led_polarity => {
                 self.prefs.wireless.zb_node_led_flags ^= 1;
@@ -6012,7 +6049,7 @@ pub const Engine = struct {
             .node_gpio => {
                 self.zb_node_channel_idx = h.dev;
                 const gpio = self.prefs.wireless.zb_node_channels[h.dev].gpio;
-                self.openNumberForTarget(.wl_zb_node_gpio, "GPIO 0-30 (empty = None)", if (gpio < 0) 0 else @intCast(gpio));
+                self.openNumberForTarget(.wl_zb_node_gpio, "XIAO pin D0-D10", xiaoGpioToDigitalPin(gpio) orelse 0);
             },
             .node_poll => {
                 self.zb_node_channel_idx = h.dev;

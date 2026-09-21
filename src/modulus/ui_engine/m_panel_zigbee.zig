@@ -138,6 +138,12 @@ pub const Layout = struct {
     node_page_start: u8 = 0,
 };
 
+fn xiaoDigitalPin(gpio: i8) ?u8 {
+    const pins = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
+    for (pins, 0..) |candidate, pin| if (gpio == candidate) return @intCast(pin);
+    return null;
+}
+
 fn gridCols(view_w: i32, device_count: u8) i32 {
     const cols = @divTrunc(view_w + grid_gap, min_tile_w + grid_gap);
     return @max(1, @min(@as(i32, @intCast(device_count)), @min(max_grid_cols, cols)));
@@ -541,7 +547,12 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
                     paintDropdownRow(logical, theme, lay.node_type[i], "Function", types[@min(@as(usize, ch.typ), types.len - 1)]);
                     y += row + node_gap;
                     lay.node_gpio[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
-                    const gpio_text = if (ch.gpio < 0) "None" else std.fmt.bufPrint(&gpio, "GPIO {d}", .{ch.gpio}) catch "?";
+                    const gpio_text = if (ch.gpio < 0)
+                        "None"
+                    else if (xiaoDigitalPin(ch.gpio)) |pin|
+                        std.fmt.bufPrint(&gpio, "D{d} (GPIO {d})", .{ pin, ch.gpio }) catch "?"
+                    else
+                        std.fmt.bufPrint(&gpio, "Invalid GPIO {d}", .{ch.gpio}) catch "?";
                     paintDropdownRow(logical, theme, lay.node_gpio[i], "Pin", gpio_text);
                     lay.node_favorite[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
                     const favorites = [_][]const u8{ "Not shown", "Position 1", "Position 2", "Position 3" };

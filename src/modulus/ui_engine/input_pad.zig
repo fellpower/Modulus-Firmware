@@ -454,6 +454,34 @@ fn fullDock() geom.Rect {
     };
 }
 
+fn zigbeePinDialog() geom.Rect {
+    const margin_x: i32 = 80;
+    const margin_y: i32 = 44;
+    return .{
+        .x = margin_x,
+        .y = margin_y,
+        .w = tokens.Logical.width - margin_x * 2,
+        .h = tokens.Logical.height - margin_y * 2,
+    };
+}
+
+fn gridForZigbeePin(panel: geom.Rect) Grid {
+    const pad: i32 = tokens.Space.md;
+    const head: i32 = 112;
+    const cols: i32 = 4;
+    const rows: i32 = 4;
+    const gap: i32 = tokens.Space.sm;
+    const avail_w = panel.w - pad * 2;
+    const avail_h = panel.h - head - pad;
+    return .{
+        .ox = panel.x + pad,
+        .oy = panel.y + head,
+        .kw = @divTrunc(avail_w - (cols - 1) * gap, cols),
+        .kh = @divTrunc(avail_h - (rows - 1) * gap, rows),
+        .gap = gap,
+    };
+}
+
 fn compactCard() geom.Rect {
     // LVGL compact: 560 wide, align bottom -20. Height must clear the header
     // plus 4 rows of min-height keys or the OK/space row lands on the scrim,
@@ -483,6 +511,7 @@ fn pickerDialog() geom.Rect {
 /// Number/PIN always dock full. Text uses kb_full. Pickers: dialog + dock.
 pub fn panelRect(st: *const State) geom.Rect {
     if (isPicker(st.mode)) return pickerDialog();
+    if (st.target == .wl_zb_node_gpio) return zigbeePinDialog();
     if (st.mode != .text or st.pin_layout) return fullDock();
     return if (st.kb_full) fullDock() else compactCard();
 }
@@ -534,12 +563,13 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, st: *State) void {
     if (panel.x == 0) {
         logical.fillRect(.{ .x = panel.x, .y = panel.y, .w = panel.w, .h = 1 }, theme.outline_variant);
     }
-    font.drawTextRole(logical, panel.x + 16, panel.y + 10, st.title, theme.on_surface, .title_s);
+    const pin_choice = st.target == .wl_zb_node_gpio;
+    font.drawTextRole(logical, panel.x + 20, panel.y + 12, st.title, theme.on_surface, if (pin_choice) .title_l else .title_s);
 
     const field: geom.Rect = .{
-        .x = panel.x + 16,
-        .y = panel.y + 34,
-        .w = panel.w - 32,
+        .x = panel.x + 20,
+        .y = panel.y + @as(i32, if (pin_choice) 50 else 34),
+        .w = panel.w - 40,
         .h = tokens.Logical.touch_min,
     };
     var mask_buf: [64]u8 = undefined;
@@ -560,13 +590,20 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, st: *State) void {
             else => "0",
         },
     };
-    // Modal pad field is the active input → focused.
-    widgets.drawOutlinedTextField(logical, field, value, placeholder, true, true, false, theme);
+    // Modal pad field is the active input → focused. The XIAO selector uses a
+    // prominent board-pin label instead of the generic small numeric field.
+    if (pin_choice) {
+        var pin_buf: [8]u8 = undefined;
+        const shown = if (empty) "D0-D10" else std.fmt.bufPrint(&pin_buf, "D{s}", .{value}) catch value;
+        widgets.drawOutlinedTextFieldCentered(logical, field, shown, true, theme, .headline_l);
+    } else {
+        widgets.drawOutlinedTextField(logical, field, value, placeholder, true, true, false, theme);
+    }
 
     if (st.pin_layout) {
         paintPinGrid(logical, theme, gridFor(panel, 3, 4));
     } else switch (st.mode) {
-        .number => paintNumGrid(logical, theme, gridFor(panel, 4, 4), numberAuxChar(st.target)),
+        .number => paintNumGrid(logical, theme, if (pin_choice) gridForZigbeePin(panel) else gridFor(panel, 4, 4), numberAuxChar(st.target), pin_choice),
         .text => paintTextGrid(logical, theme, panel, st),
         else => {},
     }
@@ -603,7 +640,7 @@ fn paintPicker(logical: *fb.LogicalFb, theme: tokens.Theme, st: *State) void {
     const dock = fullDock();
     widgets.fillRoundRect(logical, dock, tokens.Shape.lg, theme.surface_container_high);
     // Pickers consume digits only — a separator key here would be inert.
-    paintNumGrid(logical, theme, gridForDock(dock, 4, 4), null);
+    paintNumGrid(logical, theme, gridForDock(dock, 4, 4), null, false);
 }
 
 fn paintFieldRow(
@@ -659,6 +696,14 @@ fn paintKey(logical: *fb.LogicalFb, r: geom.Rect, label: []const u8, fill: color
     font.drawTextRole(logical, r.x + @divTrunc(r.w - tw, 2), r.y + @divTrunc(r.h - th, 2), label, on, .label_l);
 }
 
+fn paintLargeKey(logical: *fb.LogicalFb, r: geom.Rect, label: []const u8, fill: color.Rgb565, on: color.Rgb565) void {
+    widgets.fillRoundRect(logical, r, tokens.Shape.lg, fill);
+    const role: tokens.TypeRole = .headline_l;
+    const tw = font.textWidthStr(label, role);
+    const th = font.faceHeight(font.faceForRole(role));
+    font.drawTextRole(logical, r.x + @divTrunc(r.w - tw, 2), r.y + @divTrunc(r.h - th, 2), label, on, role);
+}
+
 fn cell(g: Grid, col: i32, row: i32) geom.Rect {
     return .{
         .x = g.ox + col * (g.kw + g.gap),
@@ -680,27 +725,28 @@ fn paintPinGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid) void {
     paintKey(logical, cell(g, 2, 3), "OK", theme.primary, theme.on_primary);
 }
 
-fn paintNumGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid, aux: ?u8) void {
+fn paintNumGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid, aux: ?u8, large: bool) void {
     const digits = "123456789";
     var i: usize = 0;
     while (i < 9) : (i += 1) {
         var lab: [1]u8 = .{digits[i]};
-        paintKey(logical, cell(g, @intCast(i % 3), @intCast(i / 3)), lab[0..], theme.surface_container, theme.on_surface);
+        const r = cell(g, @intCast(i % 3), @intCast(i / 3));
+        if (large) paintLargeKey(logical, r, lab[0..], theme.surface_container_high, theme.on_surface) else paintKey(logical, r, lab[0..], theme.surface_container, theme.on_surface);
     }
-    paintKey(logical, cell(g, 3, 0), "DEL", theme.secondary_container, theme.on_secondary_container);
+    if (large) paintLargeKey(logical, cell(g, 3, 0), "DEL", theme.secondary_container, theme.on_secondary_container) else paintKey(logical, cell(g, 3, 0), "DEL", theme.secondary_container, theme.on_secondary_container);
     if (aux) |ch| {
         var label: [1]u8 = .{ch};
-        paintKey(logical, cell(g, 3, 2), label[0..], theme.surface_container, theme.on_surface);
+        if (large) paintLargeKey(logical, cell(g, 3, 2), label[0..], theme.surface_container_high, theme.on_surface) else paintKey(logical, cell(g, 3, 2), label[0..], theme.surface_container, theme.on_surface);
     }
-    paintKey(logical, cell(g, 3, 3), "X", theme.error_container, theme.on_error_container);
+    if (large) paintLargeKey(logical, cell(g, 3, 3), "X", theme.error_container, theme.on_error_container) else paintKey(logical, cell(g, 3, 3), "X", theme.error_container, theme.on_error_container);
     const ok: geom.Rect = .{
         .x = g.ox,
         .y = g.oy + 3 * (g.kh + g.gap),
         .w = g.kw * 2 + g.gap,
         .h = g.kh,
     };
-    paintKey(logical, ok, "OK", theme.primary, theme.on_primary);
-    paintKey(logical, cell(g, 2, 3), "0", theme.surface_container, theme.on_surface);
+    if (large) paintLargeKey(logical, ok, "OK", theme.primary, theme.on_primary) else paintKey(logical, ok, "OK", theme.primary, theme.on_primary);
+    if (large) paintLargeKey(logical, cell(g, 2, 3), "0", theme.surface_container_high, theme.on_surface) else paintKey(logical, cell(g, 2, 3), "0", theme.surface_container, theme.on_surface);
 }
 
 fn paintTextGrid(logical: *fb.LogicalFb, theme: tokens.Theme, panel: geom.Rect, st: *const State) void {
@@ -815,7 +861,7 @@ pub fn hitTest(st: *const State, x: i32, y: i32) HitInfo {
     if (st.pin_layout) return hitPin(gridFor(panel, 3, 4), x, y);
     return switch (st.mode) {
         .text => hitText(st, panel, x, y),
-        .number => hitNum(gridFor(panel, 4, 4), x, y, numberAuxChar(st.target)),
+        .number => hitNum(if (st.target == .wl_zb_node_gpio) gridForZigbeePin(panel) else gridFor(panel, 4, 4), x, y, numberAuxChar(st.target)),
         else => .{},
     };
 }
@@ -1012,6 +1058,16 @@ test "pin mask and dock" {
     st.kb_full = true;
     try std.testing.expectEqual(@as(i32, 0), panelRect(&st).x);
     try std.testing.expectEqual(@as(i32, @divTrunc(@as(i32, tokens.Logical.height) * 48, 100)), panelRect(&st).h);
+}
+
+test "zigbee pin pad uses nearly the full display" {
+    var st: State = .{};
+    st.openPad(.number, .wl_zb_node_gpio, "XIAO pin D0-D10", "5");
+    const panel = panelRect(&st);
+    try std.testing.expect(panel.w >= tokens.Logical.width - 160);
+    try std.testing.expect(panel.h >= tokens.Logical.height - 88);
+    const grid = gridFor(panel, 4, 4);
+    try std.testing.expect(grid.kh >= 100);
 }
 
 test "text keyboard keys fit inside dock" {
