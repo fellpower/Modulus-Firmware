@@ -47,6 +47,11 @@ Der Reiter **Releases** enthält die Installationsdateien, Anleitung und Prüfsu
   `modulus-s3-xiao-full.bin` verwendet.
 - Die S3-**OTA-Images** sind für spätere Aktualisierungen über das S3-Menü gedacht.
 
+> **Achtung beim NanoH2:** Ein Full-Flash löscht das gespeicherte Zigbee-Netzwerk
+> einschließlich Netzwerkschlüssel und gekoppelter Geräte. Danach müssen alle
+> Zigbee-Nodes erneut angelernt werden. Für normale NanoH2-Aktualisierungen das
+> OTA-/App-Image verwenden; dabei bleiben Netzwerk und Geräte erhalten.
+
 Das Ziel über seinen normalen USB-Anschluss verbinden und die passende einzelne
 Full-BIN an Adresse `0x0` schreiben. Beispiel für den XIAO (`COM8` durch seinen
 tatsächlichen Port ersetzen):

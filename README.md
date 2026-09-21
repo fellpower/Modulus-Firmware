@@ -11,7 +11,7 @@
 <p align="center"><strong><a href="https://www.youtube.com/watch?v=mvP2etHl_e0">Watch the Modulus project video</a></strong></p>
 
 <p align="center">
-  <strong>English</strong> · <a href="README.de.md">Deutsch</a>
+  <strong>English</strong> · <a href="#deutsch">Deutsch</a>
 </p>
 
 # Modulus Firmware
@@ -63,6 +63,11 @@ successful boot from its second OTA slot, have been verified on real hardware.
 > and dual-slot partition table. Only after that first flash can subsequent S3
 > updates use `modulus-s3-xiao-ota.bin` through **M Panel → S3 Update**.
 > Do not send the first-flash/full image through the OTA menu.
+
+> **NanoH2 Full resets the Zigbee network.** Use the NanoH2 full image only for
+> initial installation or recovery. It erases the coordinator network data, so
+> every Zigbee node must be paired again. For normal NanoH2 firmware updates,
+> use the OTA/app image; it preserves the network and paired devices.
 
 For the Tab5 C6, the stock ESP-Hosted firmware already provides slave OTA. The
 P4 OTA-enabled firmware still has to be installed first before **C6 Update** is
@@ -316,3 +321,84 @@ Host regression test for C6 OTA: `python scripts/test_c6_ota.py` (requires Zig).
 Tab5 · ExtEncoder + wheel · industrial NO E-Stop · Stamp NanoH2 · ESP32-S3 cabinet bridge · NP-F pack(s) · optional COMMU Module Extend.
 
 Mechanical files: [`cad/`](cad/) · Wiring / schematics: [`schematics/`](schematics/).
+
+---
+
+<a id="deutsch"></a>
+
+## Deutsch
+
+[Nach oben: English](#modulus-firmware) · **Deutsch**
+
+**Release:** v3.1.6-ota · **Branch:** `feature/tab5-ota` · **Lizenz:** [MIT](LICENSE)
+
+**Community-Diskussion:** Im [Modulus-Thread auf Discord](https://discord.com/channels/648972213734604807/1540534494921105419) könnt ihr Fragen, Feedback und Erfahrungen zum Aufbau teilen.
+
+**Danksagung:** Besonderer Dank an **Sae** und **Miklos** für die wiederholten
+Tests der Tab5 ↔ S3-Funkverbindung und die Diagnose-Logs, die zur festen
+Kanalsteuerung geführt haben.
+
+Modulus macht das M5Stack Tab5 zum CNC-Pendant. Der P4 übernimmt Oberfläche und
+Steuerungslogik, der C6 WLAN und ESP-NOW. Eine S3-Bridge verbindet das Pendant
+mit der CNC-Steuerung. NanoH2 ist der optionale Zigbee-Hub.
+
+### Verbindungs- und Pinübersicht
+
+Die Grafik zeigt die kabelgebundenen Busse, Funkstrecken, Versorgung und die
+aktuell verwendeten GPIOs von Tab5, NanoH2, S3-Bridge und externem Zigbee-Node.
+Die dargestellte Relaisanbindung über den ULN2803A ist geplant und noch nicht
+an der Hardware getestet.
+
+![Modulus Verbindungs- und Pinübersicht](assets/modulus-connection-pin-overview.png)
+
+### Erstinstallation
+
+Die aktuellen Dateien stehen immer im [neuesten GitHub-Release](https://github.com/fellpower/Modulus-Firmware/releases/latest).
+Der Reiter **Releases** enthält die Installationsdateien, Anleitung und Prüfsummen.
+
+- Das **Full-Image** enthält alles für eine saubere Installation, löscht alte
+  Einstellungen und wird bei Adresse `0x0` geschrieben.
+- Für den Tab5 wird `modulus-tab5-full.bin` verwendet.
+- Für den S3 wird passend zum Board `modulus-s3-generic-full.bin` oder
+  `modulus-s3-xiao-full.bin` verwendet.
+- Die S3-**OTA-Images** sind für spätere Aktualisierungen über das S3-Menü gedacht.
+
+> **Achtung beim NanoH2:** Ein Full-Flash löscht das gespeicherte Zigbee-Netzwerk
+> einschließlich Netzwerkschlüssel und gekoppelter Geräte. Danach müssen alle
+> Zigbee-Nodes erneut angelernt werden. Für normale NanoH2-Aktualisierungen das
+> OTA-/App-Image verwenden; dabei bleiben Netzwerk und Geräte erhalten.
+
+Das Ziel über seinen normalen USB-Anschluss verbinden und die passende einzelne
+Full-BIN an Adresse `0x0` schreiben. Beispiel für den XIAO (`COM8` durch seinen
+tatsächlichen Port ersetzen):
+
+```powershell
+python -m esptool --chip esp32s3 -p COM8 erase-flash
+python -m esptool --chip esp32s3 -p COM8 write-flash 0x0 modulus-s3-xiao-full.bin
+```
+
+### Spätere S3-Updates
+
+Das passende `modulus-s3-*-ota.bin` aus dem neuesten Release ins Hauptverzeichnis
+des Sticks kopieren. **M Panel → S3 → Firmware Update → Refresh USB → Check S3
+image → Flash S3**. Nach erfolgreicher Prüfung **Restart S3** drücken.
+
+### S3-RGB-Status-LED
+
+| LED-Anzeige | Bedeutung |
+|-------------|-----------|
+| Grün dauerhaft | Die ESP-NOW-Verbindung zum Tab5 steht |
+| Kurz Cyan/Blaugrün | UART-Daten wurden zur CNC-Steuerung gesendet oder von ihr empfangen; die Anzeige bleibt etwa 140 ms aktiv |
+| Orange | ESP-NOW-Sendefehler |
+| Violett blinkend | Suche nach dem eingestellten Funkkanal |
+| Blau blinkend | Keine Verbindung; die normale Verbindungssuche läuft |
+| Dunkles Amber | Der S3 startet noch |
+
+Die S3-Bridge wertet den Maschinenzustand der CNC **nicht** aus. Cyan oder
+Blaugrün während eines Alarms zeigt nur UART-Datenverkehr an.
+
+### Sicherheit
+
+Updates nur bei stillstehender Maschine durchführen. Der echte
+Maschinen-Not-Aus bleibt die primäre Sicherheitseinrichtung; der
+Pendant-Not-Aus ersetzt ihn nicht.
