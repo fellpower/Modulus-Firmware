@@ -16,6 +16,7 @@ pub const WirelessUiCmd = union(enum) {
     en_clear,
     en_commit_mac: []const u8,
     zb_join,
+    zb_permit_join,
     zb_leave,
     zb_toggle: u8,
     zb_identify: u8,

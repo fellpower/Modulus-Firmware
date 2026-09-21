@@ -13,7 +13,7 @@
 #include "nvs_flash.h"
 
 #define FIRST_CHANNEL_EP 10
-#define PROTOCOL_VERSION 3
+#define PROTOCOL_VERSION 4
 static const char *TAG = "modulus_node";
 static mod_node_config_t s_cfg;
 /* Active channel hardware is immutable until Apply and restart. */
@@ -92,7 +92,7 @@ static void config_command(const esp_zb_zcl_custom_cluster_command_message_t *re
         if (!p || n < 1 || p[0] >= s_cfg.channel_count) { status_reply(req, req->info.command.id, 2); break; }
         uint8_t i = p[0], len = (uint8_t)strnlen(s_cfg.channel[i].name, MOD_NODE_CHANNEL_NAME_MAX - 1);
         const mod_node_channel_t *c = &s_cfg.channel[i];
-        uint8_t data[8 + MOD_NODE_CHANNEL_NAME_MAX] = {i, c->type, (uint8_t)c->gpio,
+        uint8_t data[16 + MOD_NODE_CHANNEL_NAME_MAX] = {i, c->type, (uint8_t)c->gpio,
             (uint8_t)((c->active_low ? 1 : 0) | (c->pull_up ? 2 : 0) | (c->boot_on ? 4 : 0)), len};
         memcpy(data + 5, c->name, len);
         data[5 + len] = (uint8_t)(s_cfg.poll_interval_s[i] >> 8);
@@ -100,7 +100,8 @@ static void config_command(const esp_zb_zcl_custom_cluster_command_message_t *re
         data[7 + len] = i >= s_runtime.channel_count ||
             memcmp(c, &s_runtime.channel[i], sizeof(*c)) != 0 ||
             s_cfg.poll_interval_s[i] != s_runtime.poll_interval_s[i];
-        config_reply(req, MOD_NODE_RSP_CHANNEL, data, 8 + len);
+        memcpy(data + 8 + len, s_cfg.sensor_rom[i], 8);
+        config_reply(req, MOD_NODE_RSP_CHANNEL, data, 16 + len);
         break;
     }
     case MOD_NODE_CMD_SET_NAME: {
@@ -116,9 +117,15 @@ static void config_command(const esp_zb_zcl_custom_cluster_command_message_t *re
         mod_node_config_t next = s_cfg; uint8_t i = p[0];
         if (next.channel_count <= i) next.channel_count = i + 1;
         mod_node_channel_t *c = &next.channel[i];
+        const uint8_t old_type = c->type;
+        const int8_t old_gpio = c->gpio;
         c->type = p[1]; c->gpio = (int8_t)p[2]; c->active_low = (p[3] & 1) != 0;
         c->pull_up = (p[3] & 2) != 0; c->boot_on = (p[3] & 4) != 0;
         memcpy(c->name, p + 5, p[4]); c->name[p[4]] = 0;
+        /* Moving a channel to another bus or away from DS18B20 explicitly
+         * releases its old physical sensor binding. */
+        if (c->type != MOD_NODE_CH_DS18B20 || old_type != MOD_NODE_CH_DS18B20 || old_gpio != c->gpio)
+            memset(next.sensor_rom[i], 0, 8);
         if (!mod_node_config_save(&next)) { status_reply(req, req->info.command.id, 3); break; }
         s_cfg = next; status_reply(req, req->info.command.id, 0); break;
     }
@@ -264,7 +271,22 @@ static void temperature_task(void *arg) {
             if (sampled[i] && now-last[i] < pdMS_TO_TICKS(s_runtime.poll_interval_s[i]*1000u)) continue;
             sampled[i] = true; last[i] = now;
             int16_t value = MOD_NODE_TEMP_INVALID;
-            esp_err_t err = mod_node_temperature_read(s_runtime.channel[i].gpio, &value);
+            uint8_t sensor_index = 0;
+            for (unsigned j=0; j<i; ++j) {
+                if (s_runtime.channel[j].type == MOD_NODE_CH_DS18B20 &&
+                    s_runtime.channel[j].gpio == s_runtime.channel[i].gpio) sensor_index++;
+            }
+            uint8_t found_rom[8] = {0};
+            esp_err_t err = mod_node_temperature_read(s_runtime.channel[i].gpio, sensor_index,
+                s_runtime.sensor_rom[i], found_rom, &value);
+            bool was_unbound=true; for(int b=0;b<8;b++) was_unbound &= s_runtime.sensor_rom[i][b]==0;
+            if (err==ESP_OK && was_unbound) {
+                memcpy(s_runtime.sensor_rom[i], found_rom, 8);
+                memcpy(s_cfg.sensor_rom[i], found_rom, 8);
+                if (!mod_node_config_save(&s_cfg)) ESP_LOGW(TAG, "Could not persist sensor ROM for channel %u", i+1);
+                else ESP_LOGI(TAG, "Bound channel %u to DS18B20 %02x%02x..%02x%02x", i+1,
+                    found_rom[0], found_rom[1], found_rom[6], found_rom[7]);
+            }
             if (err != ESP_OK) ESP_LOGW(TAG, "Temperature channel %u GPIO%d: %s", i+1, s_runtime.channel[i].gpio, esp_err_to_name(err));
             esp_zb_lock_acquire(portMAX_DELAY);
             esp_zb_zcl_set_attribute_val(FIRST_CHANNEL_EP+i, 0x0402, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, 0, &value, false);

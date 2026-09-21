@@ -7,7 +7,9 @@
 #include "driver/gpio.h"
 #include <string.h>
 
-esp_err_t mod_node_temperature_read(int gpio, int16_t *centi_c)
+esp_err_t mod_node_temperature_read(int gpio, uint8_t sensor_index,
+                                    const uint8_t wanted_rom[8], uint8_t found_rom[8],
+                                    int16_t *centi_c)
 {
     *centi_c = MOD_NODE_TEMP_INVALID;
     if (!mod_node_gpio_allowed(gpio)) return ESP_ERR_INVALID_ARG;
@@ -21,16 +23,20 @@ esp_err_t mod_node_temperature_read(int gpio, int16_t *centi_c)
     /* Release the RMT pair after every sample: twelve configured channels
      * must not require twelve simultaneously allocated RMT peripherals. */
     if ((err = onewire_new_device_iter(bus, &iter)) != ESP_OK) goto done;
-    onewire_device_t dev, extra;
-    if ((err = onewire_device_iter_get_next(iter, &dev)) != ESP_OK) goto done;
+    onewire_device_t dev;
+    bool wanted=false; for (int b=0;b<8;b++) wanted|=wanted_rom && wanted_rom[b]!=0;
+    uint8_t found = 0;
+    for (;;) {
+        if ((err = onewire_device_iter_get_next(iter, &dev)) != ESP_OK) goto done;
+        uint8_t candidate[8]; memcpy(candidate, &dev.address, sizeof(candidate));
+        if ((wanted && memcmp(candidate, wanted_rom, 8)==0) || (!wanted && found++==sensor_index)) break;
+    }
     uint8_t rom[8];
     memcpy(rom, &dev.address, sizeof(rom));
     if (rom[0] != 0x28 || mod_node_crc8(rom, 7) != rom[7]) {
         err = ESP_ERR_INVALID_RESPONSE; goto done;
     }
-    err = onewire_device_iter_get_next(iter, &extra);
-    if (err == ESP_OK) { err = ESP_ERR_NOT_SUPPORTED; goto done; }
-    if (err != ESP_ERR_NOT_FOUND) goto done;
+    if (found_rom) memcpy(found_rom, rom, 8);
     ds18b20_config_t ds_cfg = {};
     if ((err = ds18b20_new_device_from_enumeration(&dev, &ds_cfg, &sensor)) != ESP_OK) goto done;
     if ((err = ds18b20_set_resolution(sensor, DS18B20_RESOLUTION_12B)) != ESP_OK) goto done;

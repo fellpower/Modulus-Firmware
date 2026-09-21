@@ -376,6 +376,8 @@ pub fn isPinTarget(t: Target) bool {
 pub const NumberKind = enum {
     /// `parseInt(u32)` — every settings value except the two below.
     integer,
+    /// Signed whole degrees Celsius.
+    signed_integer,
     /// `parseFloat` — probe plate thickness.
     decimal,
     /// Dotted quad kept as text (Masso IP).
@@ -384,6 +386,7 @@ pub const NumberKind = enum {
 
 pub fn numberKind(t: Target) NumberKind {
     return switch (t) {
+        .wl_zb_node_alarm_high, .wl_zb_node_alarm_low => .signed_integer,
         .dash_probe_zoff => .decimal,
         .cnc_masso_ip => .dotted,
         else => .integer,
@@ -393,7 +396,18 @@ pub fn numberKind(t: Target) NumberKind {
 /// Only paint/hit the '.' key where the target can actually use it — an
 /// integer target that accepts "1.5" just drops the value on commit.
 pub fn allowsDot(t: Target) bool {
-    return numberKind(t) != .integer;
+    return switch (numberKind(t)) {
+        .decimal, .dotted => true,
+        .integer, .signed_integer => false,
+    };
+}
+
+fn numberAuxChar(t: Target) ?u8 {
+    return switch (numberKind(t)) {
+        .signed_integer => '-',
+        .decimal, .dotted => '.',
+        .integer => null,
+    };
 }
 
 /// True when the number buffer will commit. PIN buffers are raw digits and
@@ -408,6 +422,7 @@ pub fn numberValid(t: Target, txt: []const u8) bool {
     if (txt.len == 0) return false;
     switch (numberKind(t)) {
         .integer => _ = std.fmt.parseInt(u32, txt, 10) catch return false,
+        .signed_integer => _ = std.fmt.parseInt(i32, txt, 10) catch return false,
         .decimal => _ = std.fmt.parseFloat(f32, txt) catch return false,
         .dotted => {},
     }
@@ -551,7 +566,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, st: *State) void {
     if (st.pin_layout) {
         paintPinGrid(logical, theme, gridFor(panel, 3, 4));
     } else switch (st.mode) {
-        .number => paintNumGrid(logical, theme, gridFor(panel, 4, 4), allowsDot(st.target)),
+        .number => paintNumGrid(logical, theme, gridFor(panel, 4, 4), numberAuxChar(st.target)),
         .text => paintTextGrid(logical, theme, panel, st),
         else => {},
     }
@@ -588,7 +603,7 @@ fn paintPicker(logical: *fb.LogicalFb, theme: tokens.Theme, st: *State) void {
     const dock = fullDock();
     widgets.fillRoundRect(logical, dock, tokens.Shape.lg, theme.surface_container_high);
     // Pickers consume digits only — a separator key here would be inert.
-    paintNumGrid(logical, theme, gridForDock(dock, 4, 4), false);
+    paintNumGrid(logical, theme, gridForDock(dock, 4, 4), null);
 }
 
 fn paintFieldRow(
@@ -665,7 +680,7 @@ fn paintPinGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid) void {
     paintKey(logical, cell(g, 2, 3), "OK", theme.primary, theme.on_primary);
 }
 
-fn paintNumGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid, dot: bool) void {
+fn paintNumGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid, aux: ?u8) void {
     const digits = "123456789";
     var i: usize = 0;
     while (i < 9) : (i += 1) {
@@ -673,7 +688,10 @@ fn paintNumGrid(logical: *fb.LogicalFb, theme: tokens.Theme, g: Grid, dot: bool)
         paintKey(logical, cell(g, @intCast(i % 3), @intCast(i / 3)), lab[0..], theme.surface_container, theme.on_surface);
     }
     paintKey(logical, cell(g, 3, 0), "DEL", theme.secondary_container, theme.on_secondary_container);
-    if (dot) paintKey(logical, cell(g, 3, 2), ".", theme.surface_container, theme.on_surface);
+    if (aux) |ch| {
+        var label: [1]u8 = .{ch};
+        paintKey(logical, cell(g, 3, 2), label[0..], theme.surface_container, theme.on_surface);
+    }
     paintKey(logical, cell(g, 3, 3), "X", theme.error_container, theme.on_error_container);
     const ok: geom.Rect = .{
         .x = g.ox,
@@ -695,7 +713,7 @@ fn paintTextGrid(logical: *fb.LogicalFb, theme: tokens.Theme, panel: geom.Rect, 
     if (st.digits_page) {
         paintCharRow(logical, theme, g, 0, "1234567890", 0, fill, on);
         paintCharRow(logical, theme, g, 1, "-/:;()$&@\"", 0, fill, on);
-        // Row 2: punctuation (7) + Bk (1.5) with left pad matching letter row.
+        // Row 2: punctuation (7) + Del (1.5) with left pad matching letter row.
         const punct = ".,?!'" ++ "\"";
         var i: usize = 0;
         while (i < punct.len) : (i += 1) {
@@ -703,7 +721,7 @@ fn paintTextGrid(logical: *fb.LogicalFb, theme: tokens.Theme, panel: geom.Rect, 
             var lab: [1]u8 = .{punct[i]};
             paintKey(logical, textKeySpan(g, 2, unit0, 1), lab[0..], fill, on);
         }
-        paintKey(logical, textKeySpan(g, 2, 8.5, 1.5), "Bk", fill, on);
+        paintKey(logical, textKeySpan(g, 2, 8.5, 1.5), "Del", theme.primary, theme.on_primary);
         paintTextBottom(logical, theme, g, true);
         return;
     }
@@ -713,7 +731,7 @@ fn paintTextGrid(logical: *fb.LogicalFb, theme: tokens.Theme, panel: geom.Rect, 
     const row2 = if (upper) "ZXCVBNM" else "zxcvbnm";
     paintCharRow(logical, theme, g, 0, row0, 0, fill, on);
     paintCharRow(logical, theme, g, 1, row1, @divTrunc(g.kw + g.gap, 2), fill, on);
-    // Row 2: ABC (1.5) + 7 letters + Bk (1.5) = 10 units.
+    // Row 2: ABC (1.5) + 7 letters + Del (1.5) = 10 units.
     {
         const shift_fill = if (st.shift_on or st.caps) theme.primary else fill;
         const shift_on = if (st.shift_on or st.caps) theme.on_primary else on;
@@ -725,7 +743,7 @@ fn paintTextGrid(logical: *fb.LogicalFb, theme: tokens.Theme, panel: geom.Rect, 
             var lab: [1]u8 = .{row2[i]};
             paintKey(logical, textKeySpan(g, 2, unit0, 1), lab[0..], fill, on);
         }
-        paintKey(logical, textKeySpan(g, 2, 8.5, 1.5), "Bk", fill, on);
+        paintKey(logical, textKeySpan(g, 2, 8.5, 1.5), "Del", theme.primary, theme.on_primary);
     }
     paintTextBottom(logical, theme, g, false);
 }
@@ -797,7 +815,7 @@ pub fn hitTest(st: *const State, x: i32, y: i32) HitInfo {
     if (st.pin_layout) return hitPin(gridFor(panel, 3, 4), x, y);
     return switch (st.mode) {
         .text => hitText(st, panel, x, y),
-        .number => hitNum(gridFor(panel, 4, 4), x, y, allowsDot(st.target)),
+        .number => hitNum(gridFor(panel, 4, 4), x, y, numberAuxChar(st.target)),
         else => .{},
     };
 }
@@ -811,7 +829,7 @@ fn hitPicker(st: *const State, x: i32, y: i32) HitInfo {
             return .{ .kind = .field, .ch = @intFromEnum(f) };
     }
     const dock = fullDock();
-    if (dock.contains(x, y)) return hitNum(gridForDock(dock, 4, 4), x, y, false);
+    if (dock.contains(x, y)) return hitNum(gridForDock(dock, 4, 4), x, y, null);
     const card = pickerDialog();
     if (card.contains(x, y)) return .{};
     return .{ .kind = .outside };
@@ -830,7 +848,7 @@ fn hitPin(g: Grid, x: i32, y: i32) HitInfo {
     return .{};
 }
 
-fn hitNum(g: Grid, x: i32, y: i32, dot: bool) HitInfo {
+fn hitNum(g: Grid, x: i32, y: i32, aux: ?u8) HitInfo {
     const ok: geom.Rect = .{
         .x = g.ox,
         .y = g.oy + 3 * (g.kh + g.gap),
@@ -841,7 +859,7 @@ fn hitNum(g: Grid, x: i32, y: i32, dot: bool) HitInfo {
     if (cell(g, 2, 3).contains(x, y)) return .{ .kind = .digit, .ch = '0' };
     if (cell(g, 3, 3).contains(x, y)) return .{ .kind = .cancel };
     if (cell(g, 3, 0).contains(x, y)) return .{ .kind = .backspace };
-    if (dot and cell(g, 3, 2).contains(x, y)) return .{ .kind = .dot, .ch = '.' };
+    if (aux) |ch| if (cell(g, 3, 2).contains(x, y)) return .{ .kind = .dot, .ch = ch };
     const digits = "123456789";
     var i: usize = 0;
     while (i < 9) : (i += 1) {
@@ -1032,6 +1050,18 @@ test "decimal key only where the target parses it" {
     try std.testing.expect(numberValid(.dash_probe_zoff, "1.5"));
     try std.testing.expect(numberValid(.cnc_masso_ip, "192.168.1.5"));
     try std.testing.expect(!numberValid(.disp_bright, ""));
+}
+
+test "temperature alarm keypad accepts signed whole degrees" {
+    var st: State = .{};
+    st.openPad(.number, .wl_zb_node_alarm_low, "Low alarm", "-10");
+    const sign = cell(gridFor(panelRect(&st), 4, 4), 3, 2);
+    const hit = hitTest(&st, sign.x + 4, sign.y + 4);
+    try std.testing.expect(hit.kind == .dot);
+    try std.testing.expectEqual(@as(u8, '-'), hit.ch);
+    try std.testing.expect(numberValid(.wl_zb_node_alarm_low, "-55"));
+    try std.testing.expect(numberValid(.wl_zb_node_alarm_high, "150"));
+    try std.testing.expect(!numberValid(.wl_zb_node_alarm_low, "-1.5"));
 }
 
 test "picker dock has no inert separator key" {

@@ -18,8 +18,8 @@ pub const max_devices: usize = 8;
 const card_w: i32 = 1180;
 const card_h: i32 = 600;
 const grid_gap: i32 = tokens.Space.md;
-const min_tile_w: i32 = 360;
-const max_grid_cols: i32 = 3;
+const min_tile_w: i32 = 520;
+const max_grid_cols: i32 = 2;
 const btn_size = tokens.ButtonSize.m;
 const row_h: i32 = zb_exposes.row_h;
 
@@ -47,6 +47,7 @@ pub const CardLayout = struct {
     identify: geom.Rect = .{},
     remove: geom.Rect = .{},
     configure: geom.Rect = .{},
+    rename: geom.Rect = .{},
 };
 
 pub const Hit = struct {
@@ -61,6 +62,7 @@ pub const Kind = enum {
     scrim,
     back,
     exit,
+    radio_toggle,
     permit_join,
     refresh,
     join_hub,
@@ -74,6 +76,7 @@ pub const Kind = enum {
     identify,
     remove,
     configure,
+    rename,
     node_name,
     node_channel_name,
     node_type,
@@ -87,6 +90,8 @@ pub const Kind = enum {
     node_alarm_high,
     node_alarm_low,
     node_alarm_hysteresis,
+    node_alarm_action,
+    node_alarm_output,
     node_led_gpio,
     node_led_polarity,
     node_apply,
@@ -102,6 +107,7 @@ pub const Layout = struct {
     refresh: geom.Rect = .{},
     join: geom.Rect = .{},
     add: geom.Rect = .{},
+    radio: geom.Rect = .{},
     view: geom.Rect = .{},
     cards: [max_devices]CardLayout = [_]CardLayout{.{}} ** max_devices,
     card_n: u8 = 0,
@@ -121,6 +127,8 @@ pub const Layout = struct {
     node_alarm_high: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_alarm_low: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_alarm_hysteresis: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_alarm_action: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    node_alarm_output: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_pullup: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_polarity: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
     node_apply: geom.Rect = .{},
@@ -130,9 +138,9 @@ pub const Layout = struct {
     node_page_start: u8 = 0,
 };
 
-fn gridCols(view_w: i32) i32 {
+fn gridCols(view_w: i32, device_count: u8) i32 {
     const cols = @divTrunc(view_w + grid_gap, min_tile_w + grid_gap);
-    return @max(1, @min(max_grid_cols, cols));
+    return @max(1, @min(@as(i32, @intCast(device_count)), @min(max_grid_cols, cols)));
 }
 
 fn gridRows(card_n: u8, cols: i32) i32 {
@@ -166,6 +174,17 @@ fn btnWidth(label: []const u8) i32 {
     return @max(tokens.Logical.touch_min, tw + btn_size.padX() * 2);
 }
 
+fn dsBusOrdinal(w: *const settings_prefs.WirelessPrefs, channel_idx: usize) u8 {
+    if (channel_idx >= w.zb_node_channels.len) return 0;
+    const selected = w.zb_node_channels[channel_idx];
+    if (selected.typ != 4 or selected.gpio < 0) return 0;
+    var ordinal: u8 = 1;
+    for (w.zb_node_channels[0..channel_idx]) |prior| {
+        if (prior.typ == 4 and prior.gpio == selected.gpio) ordinal += 1;
+    }
+    return ordinal;
+}
+
 pub fn devCount(w: *const settings_prefs.WirelessPrefs) u8 {
     return @intCast(@min(if (w.live_zb_n > 0) w.live_zb_n else w.zb_dev_n, max_devices));
 }
@@ -185,23 +204,27 @@ fn sliderPct(row: geom.Rect, x: i32) u8 {
 }
 
 fn paintToggleRow(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect, label: []const u8, on: bool) void {
+    widgets.fillRoundRect(logical, r, tokens.Shape.sm, theme.surface_container_high);
+    widgets.strokeRoundRect(logical, r, tokens.Shape.sm, theme.outline_variant, 1);
     const lh = font.faceHeight(font.faceForRole(.label_m));
-    font.drawTextRole(logical, r.x + tokens.Space.sm, r.y + @divTrunc(row_h - lh, 2), label, theme.on_surface_variant, .label_m);
-    widgets.drawSwitchBool(logical, r.x + r.w - 52, r.y + @divTrunc(row_h - 28, 2), on, theme);
+    font.drawTextRole(logical, r.x + tokens.Space.md, r.y + @divTrunc(r.h - lh, 2), label, theme.primary, .label_m);
+    widgets.drawSwitchBool(logical, r.x + r.w - 60, r.y + @divTrunc(r.h - 28, 2), on, theme);
 }
 
 fn paintDropdownRow(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect, label: []const u8, value: []const u8) void {
+    widgets.fillRoundRect(logical, r, tokens.Shape.sm, theme.surface_container_high);
+    widgets.strokeRoundRect(logical, r, tokens.Shape.sm, theme.outline_variant, 1);
     const lh = font.faceHeight(font.faceForRole(.label_m));
-    const label_y = r.y + @divTrunc(row_h - lh, 2);
-    font.drawTextRole(logical, r.x + tokens.Space.sm, label_y, label, theme.on_surface_variant, .label_m);
+    const label_y = r.y + @divTrunc(r.h - lh, 2);
+    font.drawTextRole(logical, r.x + tokens.Space.md, label_y, label, theme.primary, .label_m);
     const val_x = r.x + @divTrunc(r.w, 3);
-    const box_h = row_h - tokens.Space.sm;
-    const box_y = r.y + @divTrunc(row_h - box_h, 2);
-    widgets.fillRoundRect(logical, .{ .x = val_x, .y = box_y, .w = r.w - val_x + r.x - tokens.Space.sm, .h = box_h }, tokens.Shape.sm, theme.surface_container_high);
+    const box_h = r.h - tokens.Space.md;
+    const box_y = r.y + @divTrunc(r.h - box_h, 2);
+    widgets.fillRoundRect(logical, .{ .x = val_x, .y = box_y, .w = r.w - val_x + r.x - tokens.Space.sm, .h = box_h }, tokens.Shape.sm, theme.surface_container_highest);
     widgets.strokeRoundRect(logical, .{ .x = val_x, .y = box_y, .w = r.w - val_x + r.x - tokens.Space.sm, .h = box_h }, tokens.Shape.sm, theme.outline_variant, 1);
     const vh = font.faceHeight(font.faceForRole(.body_m));
     font.drawTextRole(logical, val_x + tokens.Space.sm, box_y + @divTrunc(box_h - vh, 2), value, theme.on_surface, .body_m);
-    widgets.drawChevronDown(logical, r.x + r.w - tokens.Space.lg, r.y + @divTrunc(row_h, 2), 5, theme.on_surface_variant);
+    widgets.drawChevronDown(logical, r.x + r.w - tokens.Space.lg, r.y + @divTrunc(r.h, 2), 5, theme.on_surface_variant);
 }
 
 fn paintReadonly(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect, label: []const u8, value: []const u8, value_c: color.Rgb565) void {
@@ -232,7 +255,8 @@ fn paintDevCard(
 
     icons_phosphor.draw(logical, outer.x + pad, outer.y + pad, icon, theme.primary);
     const th = font.faceHeight(font.faceForRole(.title_m));
-    font.drawTextRole(logical, outer.x + pad + icons_phosphor.size + tokens.Space.sm, outer.y + pad + @divTrunc(th, 4), name, theme.on_surface, .title_m);
+    lay.rename = .{ .x = outer.x + pad + icons_phosphor.size + tokens.Space.sm, .y = outer.y + pad, .w = outer.w - pad * 2 - icons_phosphor.size - tokens.Space.sm, .h = icons_phosphor.size };
+    font.drawTextRole(logical, lay.rename.x, outer.y + pad + @divTrunc(th, 4), name, theme.on_surface, .title_m);
 
     var y = outer.y + pad + icons_phosphor.size + tokens.Space.sm;
     const inner_w = outer.w - pad * 2;
@@ -384,12 +408,12 @@ fn paintDevCard(
 
     lay.exposes_link = .{ .x = outer.x + pad, .y = y, .w = inner_w, .h = row_h };
     const link_lh = font.faceHeight(font.faceForRole(.label_m));
-    font.drawTextRole(logical, lay.exposes_link.x, y + @divTrunc(row_h - link_lh, 2), "Exposes >", theme.primary, .label_m);
+    font.drawTextRole(logical, lay.exposes_link.x, y + @divTrunc(row_h - link_lh, 2), "Device details >", theme.primary, .label_m);
     y += row_h;
 
     const foot_y = outer.y + outer.h - pad - row_h;
     var lqi_buf: [16]u8 = undefined;
-    const lqi = std.fmt.bufPrint(&lqi_buf, "LQI {d}", .{snap.lqi}) catch "LQI";
+    const lqi = if (snap.lqi == 0) "Signal pending" else std.fmt.bufPrint(&lqi_buf, "Link quality {d}", .{snap.lqi}) catch "Link quality";
     const foot_mid = foot_y + @divTrunc(row_h, 2);
     icons_phosphor.draw(logical, outer.x + pad, foot_y + @divTrunc(row_h - icons_phosphor.size, 2), .rss_simple, theme.on_surface_variant);
     const foot_lh = font.faceHeight(font.faceForRole(.label_m));
@@ -405,13 +429,13 @@ fn paintDevCard(
 
     const cfg_w = btnWidth("Configure");
     const id_w = btnWidth("Identify");
-    const del_w = btnWidth("Del");
+    const del_w = btnWidth("Remove");
     lay.remove = .{ .x = outer.x + outer.w - pad - del_w, .y = foot_y, .w = del_w, .h = row_h };
     lay.identify = .{ .x = lay.remove.x - tokens.Space.sm - id_w, .y = foot_y, .w = id_w, .h = row_h };
     lay.configure = .{ .x = lay.identify.x - tokens.Space.sm - cfg_w, .y = foot_y, .w = cfg_w, .h = row_h };
     widgets.drawFilledButton(logical, lay.configure, "Configure", theme);
     widgets.drawTonalButton(logical, lay.identify, "Identify", theme);
-    widgets.drawDangerTonalButton(logical, lay.remove, "Del", theme);
+    widgets.drawDangerTonalButton(logical, lay.remove, "Remove", theme);
 }
 
 pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32) Layout {
@@ -429,18 +453,14 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
 
     const pad = tokens.Space.lg;
     const w = ctx.wireless;
-    const body_lh = font.faceHeight(font.faceForRole(.body_m));
     const status_y = lay.header.back.y + lay.header.back.h + tokens.Space.sm;
-    font.drawTextRole(logical, shell.x + pad, status_y, w.zbStatusSlice(), theme.on_surface_variant, .body_m);
-    const net = w.zbNetworkSlice();
-    var bar_y = status_y + body_lh + tokens.Space.md;
-    if (net.len > 0) {
-        font.drawTextRole(logical, shell.x + pad, status_y + body_lh + tokens.Space.xs, net, theme.on_surface_variant, .body_m);
-        bar_y = status_y + body_lh * 2 + tokens.Space.md;
+    const bar_y = status_y - 10;
+    if (!w.zb_node_open) {
+        lay.radio = .{ .x = shell.x + shell.w - pad - 250, .y = status_y - 10, .w = 250, .h = 52 };
+        paintToggleRow(logical, theme, lay.radio, "Zigbee radio", w.zigbee);
+        lay.add = .{ .x = shell.x + pad, .y = bar_y, .w = 260, .h = 64 };
+        widgets.drawFilledButton(logical, lay.add, "Add device", theme);
     }
-
-    lay.add = .{ .x = shell.x + pad, .y = bar_y, .w = 300, .h = 64 };
-    widgets.drawFilledButton(logical, lay.add, "Add Zigbee device", theme);
 
     const footer_h = if (w.zb_node_open) 0 else btn_size.height() + tokens.Space.md;
     const body_top = if (w.zb_node_open)
@@ -458,7 +478,6 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
         // during the transition so all four fixed channels fit without a
         // laggy scrolling surface.
         logical.fillRect(lay.view, theme.elev(3));
-        const node_row: i32 = 52;
         const node_gap = tokens.Space.sm;
         lay.scroll_max = 0;
         const node_scroll: i32 = 0;
@@ -468,12 +487,23 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
         if (!w.zb_node_ready) {
             font.drawTextRole(logical, lay.view.x, y, "Reading Node configuration...", theme.on_surface_variant, .title_m);
         } else {
-            const row = node_row;
             const count: usize = @min(@as(usize, w.zb_node_channel_count), w.zb_node_channels.len);
             const pages: usize = count + 1;
             const page: usize = @min(@as(usize, w.zb_node_page), pages - 1);
             const first: usize = page -| 1;
             const last: usize = @min(first + 1, count);
+            // Simple channel types have few controls. Let them use the screen
+            // instead of compressing their touch targets into the top half.
+            // Temperature pages contain more rows and retain the compact size.
+            const active_type: u8 = if (page > 0 and first < count) w.zb_node_channels[first].typ else 0;
+            const row: i32 = if (page == 0)
+                78
+            else switch (active_type) {
+                1, 2 => 84,
+                3 => 70,
+                4 => 52,
+                else => 78,
+            };
             lay.node_page_start = @intCast(first);
             font.drawTextRole(logical, lay.view.x, y, "Modulus Zigbee Node", theme.on_surface, .title_l);
             y += 52;
@@ -518,9 +548,28 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
                     paintDropdownRow(logical, theme, lay.node_favorite[i], "Quick access", favorites[@min(@as(usize, ch.favorite), 3)]);
                     y += row + node_gap;
                     if (ch.typ == 4) {
-                        var period: [24]u8 = undefined;
+                        var period: [80]u8 = undefined;
+                        const sensor_no = dsBusOrdinal(w, channel_idx);
+                        var rom_assigned = false;
+                        for (ch.sensor_rom) |b| rom_assigned = rom_assigned or b != 0;
+                        const poll_diag: []const u8 = if (ch.gpio < 0)
+                            "Select GPIO"
+                        else switch (ch.temperature_state) {
+                            1 => if (rom_assigned) std.fmt.bufPrint(&period, "S#{d} {d:.1}C | ID {X:0>2}{X:0>2}", .{
+                                sensor_no,
+                                @as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0,
+                                ch.sensor_rom[6], ch.sensor_rom[7],
+                            }) catch "Live" else std.fmt.bufPrint(&period, "{d}s | S#{d} {d:.1}C binding", .{
+                                ch.poll_interval_s, sensor_no,
+                                @as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0,
+                            }) catch "Binding",
+                            2 => std.fmt.bufPrint(&period, "{d}s | S#{d} sensor/CRC error", .{ ch.poll_interval_s, sensor_no }) catch "Sensor error",
+                            3 => std.fmt.bufPrint(&period, "{d}s | S#{d} node stale", .{ ch.poll_interval_s, sensor_no }) catch "Node stale",
+                            4 => std.fmt.bufPrint(&period, "{d}s | S#{d} restart required", .{ ch.poll_interval_s, sensor_no }) catch "Restart required",
+                            else => std.fmt.bufPrint(&period, "{d}s | S#{d} waiting", .{ ch.poll_interval_s, sensor_no }) catch "Waiting",
+                        };
                         lay.node_poll[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
-                        paintDropdownRow(logical, theme, lay.node_poll[i], "Poll interval", std.fmt.bufPrint(&period, "{d} s", .{ch.poll_interval_s}) catch "?");
+                        paintDropdownRow(logical, theme, lay.node_poll[i], "Diagnostics", poll_diag);
                         lay.node_alarm_enabled[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
                         paintToggleRow(logical, theme, lay.node_alarm_enabled[i], "Temperature alarm", ch.temp_alarm_enabled);
                         y += row + node_gap;
@@ -534,9 +583,26 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
                         var hyst: [24]u8 = undefined;
                         lay.node_alarm_hysteresis[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
                         paintDropdownRow(logical, theme, lay.node_alarm_hysteresis[i], "Hysteresis", std.fmt.bufPrint(&hyst, "{d:.1} C", .{@as(f32, @floatFromInt(ch.temp_alarm_hysteresis_centi_c)) / 100.0}) catch "?");
-                        var reading: [32]u8 = undefined;
-                        const value = if (ch.gpio < 0) "Select a GPIO" else if (ch.temperature_state == 1) std.fmt.bufPrint(&reading, "{d:.2} C", .{@as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0}) catch "?" else "Waiting / unavailable";
-                        paintReadonly(logical, theme, .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row }, "Temperature", value, if (ch.temp_alarm_active) theme.err else theme.on_surface_variant);
+                        const alarm_actions = [_][]const u8{ "Notification only", "CNC feed hold", "Turn output off" };
+                        if (ch.temp_alarm_action == 2) {
+                            const action_x = lay.view.x + half + node_gap;
+                            const action_half = @divTrunc(half - node_gap, 2);
+                            lay.node_alarm_action[i] = .{ .x = action_x, .y = y, .w = action_half, .h = row };
+                            paintDropdownRow(logical, theme, lay.node_alarm_action[i], "Action", alarm_actions[2]);
+                            lay.node_alarm_output[i] = .{ .x = action_x + action_half + node_gap, .y = y, .w = action_half, .h = row };
+                            var target_buf: [32]u8 = undefined;
+                            const target: []const u8 = if (ch.temp_alarm_output_channel < w.zb_node_channel_count and
+                                (w.zb_node_channels[ch.temp_alarm_output_channel].typ == 1 or w.zb_node_channels[ch.temp_alarm_output_channel].typ == 2))
+                            blk: {
+                                const target_ch = &w.zb_node_channels[ch.temp_alarm_output_channel];
+                                const saved = std.mem.sliceTo(&target_ch.name, 0);
+                                break :blk if (saved.len != 0) saved else std.fmt.bufPrint(&target_buf, "Channel {d}", .{ch.temp_alarm_output_channel + 1}) catch "Output";
+                            } else "Select output";
+                            paintDropdownRow(logical, theme, lay.node_alarm_output[i], "Target", target);
+                        } else {
+                            lay.node_alarm_action[i] = .{ .x = lay.view.x + half + node_gap, .y = y, .w = half, .h = row };
+                            paintDropdownRow(logical, theme, lay.node_alarm_action[i], "Alarm action", alarm_actions[@min(@as(usize, ch.temp_alarm_action), alarm_actions.len - 1)]);
+                        }
                         y += row + node_gap;
                     } else if (ch.typ == 3) {
                         lay.node_polarity[i] = .{ .x = lay.view.x, .y = y, .w = half, .h = row };
@@ -561,11 +627,16 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
                     }
                 }
             }
-            lay.node_apply = .{ .x = lay.view.x, .y = y + tokens.Space.sm, .w = 300, .h = btn_size.height() };
-            lay.node_close = .{ .x = lay.node_apply.x + lay.node_apply.w + tokens.Space.sm, .y = lay.node_apply.y, .w = 160, .h = btn_size.height() };
+            const action_h: i32 = 72;
+            const action_y = lay.view.y + lay.view.h - action_h;
+            const apply_w = @divTrunc(full_w * 30, 100);
+            const close_w = @divTrunc(full_w * 18, 100);
+            lay.node_apply = .{ .x = lay.view.x, .y = action_y, .w = apply_w, .h = action_h };
+            lay.node_close = .{ .x = lay.node_apply.x + lay.node_apply.w + tokens.Space.md, .y = action_y, .w = close_w, .h = action_h };
             if (count > 1) {
-                lay.node_next = .{ .x = lay.view.x + full_w - 140, .y = lay.node_apply.y, .w = 140, .h = btn_size.height() };
-                lay.node_prev = .{ .x = lay.node_next.x - 140 - tokens.Space.sm, .y = lay.node_apply.y, .w = 140, .h = btn_size.height() };
+                const nav_w = @divTrunc(full_w * 18, 100);
+                lay.node_next = .{ .x = lay.view.x + full_w - nav_w, .y = action_y, .w = nav_w, .h = action_h };
+                lay.node_prev = .{ .x = lay.node_next.x - nav_w - tokens.Space.md, .y = action_y, .w = nav_w, .h = action_h };
             }
             widgets.drawFilledButton(logical, lay.node_apply, "Apply and restart", theme);
             widgets.drawTonalButton(logical, lay.node_close, "Close", theme);
@@ -578,7 +649,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
         return lay;
     }
     lay.card_n = devCount(w);
-    const cols = gridCols(lay.view.w);
+    const cols = gridCols(lay.view.w, lay.card_n);
     lay.grid_cols = @intCast(cols);
     lay.scroll_max = scrollMax(w, lay.view.w, lay.view.h);
     const scroll = std.math.clamp(ctx.scroll_px, 0, lay.scroll_max);
@@ -588,17 +659,17 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
     // controls below the list clipped away and invisible.
 
     if (!w.zigbee) {
-        font.drawTextRole(logical, lay.view.x, lay.view.y, "Enable Zigbee radio in Settings > Wireless.", theme.on_surface_variant, .body_m);
+        font.drawTextRole(logical, lay.view.x, lay.view.y, "Switch on the Zigbee radio above to search for devices.", theme.on_surface_variant, .body_m);
         logical.setClip(null);
         return lay;
     }
     if (!w.zb_joined) {
-        font.drawTextRole(logical, lay.view.x, lay.view.y, "Join the Zigbee hub, then Permit join to pair devices.", theme.on_surface_variant, .body_m);
+        font.drawTextRole(logical, lay.view.x, lay.view.y, "Starting Zigbee...", theme.on_surface_variant, .body_m);
         logical.setClip(null);
         return lay;
     }
     if (lay.card_n == 0) {
-        font.drawTextRole(logical, lay.view.x, lay.view.y, "No devices - tap Permit join and pair a device.", theme.on_surface_variant, .body_m);
+        font.drawTextRole(logical, lay.view.x, lay.view.y, "No devices yet - tap Add device.", theme.on_surface_variant, .body_m);
         logical.setClip(null);
         return lay;
     }
@@ -648,7 +719,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
 pub fn scrollMax(w: *const settings_prefs.WirelessPrefs, view_w: i32, view_h: i32) i32 {
     const n = devCount(w);
     if (n == 0) return 0;
-    const cols = gridCols(view_w);
+    const cols = gridCols(view_w, n);
     var row_heights: [4]i32 = .{0} ** 4;
     accumulateRowHeights(w, n, cols, &row_heights);
     const rows = gridRows(n, cols);
@@ -666,6 +737,7 @@ fn cardHitAt(c: CardLayout, dev: u8, x: i32, y: i32) Hit {
     if (c.identify.contains(x, y)) return .{ .kind = .identify, .dev = dev };
     if (c.remove.contains(x, y)) return .{ .kind = .remove, .dev = dev };
     if (c.configure.contains(x, y)) return .{ .kind = .configure, .dev = dev };
+    if (c.rename.contains(x, y)) return .{ .kind = .rename, .dev = dev };
     var si: u8 = 0;
     while (si < c.slot_n) : (si += 1) {
         const slot = c.slots[si];
@@ -697,8 +769,9 @@ fn cardHitAt(c: CardLayout, dev: u8, x: i32, y: i32) Hit {
 }
 
 test "zigbee grid uses three columns on tab5 width" {
-    try std.testing.expectEqual(@as(i32, 3), gridCols(1132));
-    try std.testing.expectEqual(@as(i32, 2), gridCols(760));
+    try std.testing.expectEqual(@as(i32, 1), gridCols(1132, 1));
+    try std.testing.expectEqual(@as(i32, 2), gridCols(1132, 2));
+    try std.testing.expectEqual(@as(i32, 1), gridCols(760, 2));
 }
 
 pub fn layoutMenu(layout: Layout, dev: u8, field: zb_exposes.Field) geom.Rect {
@@ -741,6 +814,7 @@ pub fn hit(layout: Layout, x: i32, y: i32) Hit {
     if (tool_chrome.hitBack(layout.header, x, y)) return .{ .kind = .back };
     if (tool_chrome.hitExit(layout.header, x, y)) return .{ .kind = .exit };
     if (tool_chrome.hitScrim(layout.header, x, y)) return .{ .kind = .scrim };
+    if (layout.radio.contains(x, y)) return .{ .kind = .radio_toggle };
     if (layout.permit.contains(x, y)) return .{ .kind = .permit_join };
     if (layout.refresh.contains(x, y)) return .{ .kind = .refresh };
     if (!layout.join.isEmpty() and layout.join.contains(x, y)) return .{ .kind = .join_hub };
@@ -764,6 +838,8 @@ pub fn hit(layout: Layout, x: i32, y: i32) Hit {
         if (layout.node_alarm_high[i].contains(x, y)) return .{ .kind = .node_alarm_high, .dev = channel };
         if (layout.node_alarm_low[i].contains(x, y)) return .{ .kind = .node_alarm_low, .dev = channel };
         if (layout.node_alarm_hysteresis[i].contains(x, y)) return .{ .kind = .node_alarm_hysteresis, .dev = channel };
+        if (layout.node_alarm_action[i].contains(x, y)) return .{ .kind = .node_alarm_action, .dev = channel };
+        if (layout.node_alarm_output[i].contains(x, y)) return .{ .kind = .node_alarm_output, .dev = channel };
         if (layout.node_pullup[i].contains(x, y)) return .{ .kind = .node_pullup, .dev = channel };
         if (layout.node_polarity[i].contains(x, y)) return .{ .kind = .node_polarity, .dev = channel };
     }
@@ -787,7 +863,7 @@ test "zigbee panel chrome meets touch_min" {
     try std.testing.expect(lay.header.exit.w >= tokens.Logical.touch_min);
     try std.testing.expect(lay.add.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.card_n >= 3);
-    try std.testing.expectEqual(@as(u8, 3), lay.grid_cols);
+    try std.testing.expectEqual(@as(u8, 2), lay.grid_cols);
     if (lay.card_n > 0) {
         try std.testing.expect(lay.cards[0].identify.h >= tokens.Logical.touch_min);
         try std.testing.expect(lay.cards[0].remove.h >= tokens.Logical.touch_min);
@@ -803,10 +879,14 @@ test "DS18B20 page fits and poll hit selects the correct channel" {
     w.zb_node_ready = true;
     w.zb_node_channel_count = 12;
     w.zb_node_page = 12;
+    w.zb_node_channels[0].typ = 2;
+    @memcpy(w.zb_node_channels[0].name[0..3], "Fan");
     w.zb_node_channels[11].typ = 4;
     w.zb_node_channels[11].gpio = 22;
     w.zb_node_channels[11].temperature_state = 1;
     w.zb_node_channels[11].temperature_centi_c = -125;
+    w.zb_node_channels[11].temp_alarm_action = 2;
+    w.zb_node_channels[11].temp_alarm_output_channel = 0;
     const layout = paint(&logical, tokens.Theme.industrialTealDark(), .{ .wireless = &w }, 1.0);
     try std.testing.expect(layout.node_apply.y + layout.node_apply.h <= layout.view.y + layout.view.h);
     const r = layout.node_poll[0];
@@ -814,5 +894,18 @@ test "DS18B20 page fits and poll hit selects the correct channel" {
     const selected = hit(layout, r.x + 10, r.y + 10);
     try std.testing.expectEqual(Kind.node_poll, selected.kind);
     try std.testing.expectEqual(@as(u8, 11), selected.dev);
+    try std.testing.expect(!layout.node_alarm_action[0].isEmpty());
+    try std.testing.expect(!layout.node_alarm_output[0].isEmpty());
     try std.testing.expect(layout.node_polarity[0].isEmpty());
+}
+
+test "shared DS18B20 GPIO receives deterministic bus ordinals" {
+    var w: settings_prefs.WirelessPrefs = .{};
+    w.zb_node_channels[0] = .{ .typ = 4, .gpio = 22 };
+    w.zb_node_channels[1] = .{ .typ = 2, .gpio = 20 };
+    w.zb_node_channels[2] = .{ .typ = 4, .gpio = 22 };
+    w.zb_node_channels[3] = .{ .typ = 4, .gpio = 22 };
+    try std.testing.expectEqual(@as(u8, 1), dsBusOrdinal(&w, 0));
+    try std.testing.expectEqual(@as(u8, 2), dsBusOrdinal(&w, 2));
+    try std.testing.expectEqual(@as(u8, 3), dsBusOrdinal(&w, 3));
 }

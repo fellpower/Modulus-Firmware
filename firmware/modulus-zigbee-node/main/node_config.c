@@ -2,13 +2,17 @@
 #include "nvs.h"
 #include <stdio.h>
 #include <string.h>
-#define CFG_SCHEMA 4
+#define CFG_SCHEMA 5
 #define CFG_NS "modnode"
 typedef struct { uint16_t schema_version; char device_name[MOD_NODE_NAME_MAX]; uint8_t channel_count;
  mod_node_channel_t channel[MOD_NODE_CHANNEL_MAX]; } mod_node_config_v2_t;
 typedef struct { uint16_t schema_version; char device_name[MOD_NODE_NAME_MAX]; uint8_t channel_count;
  int8_t status_led_gpio; bool status_led_active_low;
  mod_node_channel_t channel[MOD_NODE_CHANNEL_MAX]; } mod_node_config_v3_t;
+typedef struct { uint16_t schema_version; char device_name[MOD_NODE_NAME_MAX]; uint8_t channel_count;
+ int8_t status_led_gpio; bool status_led_active_low;
+ mod_node_channel_t channel[MOD_NODE_CHANNEL_MAX];
+ uint16_t poll_interval_s[MOD_NODE_CHANNEL_MAX]; } mod_node_config_v4_t;
 bool mod_node_gpio_allowed(int gpio) {
     /* XIAO ESP32-C6 D0-D10 headers. Keep RF-switch GPIO3/14,
      * boot/strapping, USB, flash and the status LED away from channels. */
@@ -49,6 +53,18 @@ void mod_node_config_load(mod_node_config_t *cfg) {
         if (!mod_node_config_valid(cfg)) defaults(cfg);
         nvs_close(h); return;
     }
+    if(n==sizeof(mod_node_config_v4_t)) {
+        mod_node_config_v4_t old;
+        if(nvs_get_blob(h,"config",&old,&n)==ESP_OK && old.schema_version==4) {
+            memcpy(cfg->device_name,old.device_name,sizeof(cfg->device_name));
+            cfg->channel_count=old.channel_count; cfg->status_led_gpio=old.status_led_gpio;
+            cfg->status_led_active_low=old.status_led_active_low;
+            memcpy(cfg->channel,old.channel,sizeof(cfg->channel));
+            memcpy(cfg->poll_interval_s,old.poll_interval_s,sizeof(cfg->poll_interval_s));
+        }
+        if (!mod_node_config_valid(cfg)) defaults(cfg);
+        nvs_close(h); return;
+    }
     n=sizeof(*cfg); mod_node_config_t v;
     if(nvs_get_blob(h,"config",&v,&n)==ESP_OK&&n==sizeof(v)&&v.schema_version==CFG_SCHEMA&&mod_node_config_valid(&v)) {
         *cfg=v;
@@ -62,11 +78,29 @@ bool mod_node_config_valid(const mod_node_config_t *cfg) {
         if (cfg->channel[i].type>MOD_NODE_CH_DS18B20 || cfg->channel[i].gpio < -1 ||
             !memchr(cfg->channel[i].name,0,sizeof(cfg->channel[i].name)) ||
             cfg->poll_interval_s[i]<MOD_NODE_POLL_MIN_S || cfg->poll_interval_s[i]>MOD_NODE_POLL_MAX_S) return false;
+        const uint8_t *rom=cfg->sensor_rom[i];
+        bool assigned=false; for(int b=0;b<8;b++) assigned|=rom[b]!=0;
+        if(assigned && (cfg->channel[i].type!=MOD_NODE_CH_DS18B20 || rom[0]!=0x28)) return false;
     }
     if (cfg->status_led_gpio < -1) return false;
     bool used[31]={0};
     if(cfg->status_led_gpio >= 0) { if(!mod_node_status_led_gpio_allowed(cfg->status_led_gpio)) return false; used[cfg->status_led_gpio]=true; }
-    for(int i=0;i<cfg->channel_count;i++){int g=cfg->channel[i].gpio;if(cfg->channel[i].type==0||g<0)continue;if(!mod_node_gpio_allowed(g)||used[g])return false;used[g]=true;}
+    for(int i=0;i<cfg->channel_count;i++){
+        int g=cfg->channel[i].gpio;
+        if(cfg->channel[i].type==0||g<0)continue;
+        if(!mod_node_gpio_allowed(g))return false;
+        if(g==cfg->status_led_gpio)return false;
+        if(used[g]) {
+            /* A OneWire bus is intentionally shared by multiple DS18B20
+             * channels. No other channel type may share that GPIO. */
+            bool shared_ds = cfg->channel[i].type==MOD_NODE_CH_DS18B20;
+            for(int j=0;j<i && shared_ds;j++) {
+                if(cfg->channel[j].gpio==g && cfg->channel[j].type!=MOD_NODE_CH_DS18B20) shared_ds=false;
+            }
+            if(!shared_ds)return false;
+        }
+        used[g]=true;
+    }
     return true;
 }
 bool mod_node_config_save(const mod_node_config_t *cfg) {

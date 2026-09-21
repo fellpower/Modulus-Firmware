@@ -1673,13 +1673,10 @@ bool modulus_wireless_zigbee_enable(void)
     s_zb_on = true;
     modulus_nvs_set_u8("zigbee", 1);
     ESP_LOGI(TAG, "Zigbee radio on (NanoH2 UART hub)");
-    /* Reboot fix: the hub network only exists after HUB_START, and joining
-     * was a UI-only action — after every reboot devices looked absent until
-     * the user pressed "Join network". Replay the persisted intent. */
-    if (modulus_nvs_get_u8("zb_auto", 0) != 0) {
-        if (modulus_wireless_zigbee_join()) {
-            ESP_LOGI(TAG, "Zigbee hub auto-start (zb_auto)");
-        }
+    /* Enabling is non-destructive: reopen the existing coordinator network
+     * and request its persisted device table. Never factory-reset here. */
+    if (modulus_wireless_zigbee_join()) {
+        ESP_LOGI(TAG, "Zigbee hub start/reopen");
     }
     return true;
 }
@@ -1689,20 +1686,16 @@ bool modulus_wireless_zigbee_enable(void)
 static void wireless_zigbee_stop_hub(void)
 {
     modulus_wireless_zigbee_scan_stop();
-    if (modulus_wireless_zb_link_up()) {
-        (void)modulus_wireless_zb_leave();
-    }
+    s_zb_join_pending = false;
     s_zb_on = false;
 }
 
 void modulus_wireless_zigbee_disable(void)
 {
-    /* Explicit user toggle-off: close the hub network AND forget the
-     * auto-rejoin intent so it stays off across reboots. (Sleep uses
-     * wireless_zigbee_stop_hub, which preserves zb_auto for wake.) */
+    /* Radio-off is a UI/runtime gate, not "forget network". HUB_RESET is a
+     * factory-reset command and must only be used by an explicit reset flow. */
     wireless_zigbee_stop_hub();
     modulus_nvs_set_u8("zigbee", 0);
-    modulus_nvs_set_u8("zb_auto", 0);
 }
 
 bool modulus_wireless_thread_supported(void)

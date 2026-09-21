@@ -55,6 +55,7 @@ typedef struct {
     uint8_t type;
     int8_t gpio;
     uint8_t flags;
+    uint8_t sensor_rom[8];
     char name[24];
     bool valid;
 } modulus_zb_node_channel_t;

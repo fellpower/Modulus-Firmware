@@ -298,6 +298,7 @@ pub fn bodyTop(cnc: CncView) i32 {
 
 pub const Hit = enum {
     none,
+    alarm,
     settings,
     power,
     mpg,
@@ -380,7 +381,10 @@ fn paintStatusBar(logical: *fb.LogicalFb, theme: tokens.Theme, cnc: CncView) voi
     );
     // Alarm badge (LVGL corner dot)
     if (cnc.connected and (cnc.alarm_code != 0 or std.mem.eql(u8, cnc.state, "ALARM"))) {
+        hit_alarm = state_r;
         widgets.fillRoundRect(logical, .{ .x = state_r.x + state_r.w - 12, .y = state_r.y + 4, .w = 8, .h = 8 }, 4, theme.err);
+    } else {
+        hit_alarm = .{};
     }
     x += idle_w + tokens.Space.md; // LVGL left group pad_column MD
 
@@ -525,6 +529,7 @@ fn paintStatusBar(logical: *fb.LogicalFb, theme: tokens.Theme, cnc: CncView) voi
 
 var hit_gear: geom.Rect = .{};
 var hit_power: geom.Rect = .{};
+var hit_alarm: geom.Rect = .{};
 var hit_mpg: geom.Rect = .{};
 var hit_wcs: geom.Rect = .{};
 
@@ -604,6 +609,7 @@ pub fn hitStatus(x: i32, y: i32) Hit {
 
 pub fn hitStatusDetail(x: i32, y: i32) struct { hit: Hit, rect: geom.Rect } {
     if (y >= status_h) return .{ .hit = .none, .rect = .{} };
+    if (hit_alarm.contains(x, y)) return .{ .hit = .alarm, .rect = hit_alarm };
     if (hit_power.contains(x, y)) return .{ .hit = .power, .rect = hit_power };
     if (hit_gear.contains(x, y)) return .{ .hit = .settings, .rect = hit_gear };
     if (hit_mpg.contains(x, y)) return .{ .hit = .mpg, .rect = hit_mpg };
@@ -778,6 +784,18 @@ test "status hits include mpg after paint" {
     // Gear / power are 48×48 hits (LVGL).
     try std.testing.expectEqual(@as(i32, 48), hit_gear.w);
     try std.testing.expectEqual(@as(i32, 48), hit_power.w);
+}
+
+test "alarm state pill is directly actionable" {
+    var logical = try fb.LogicalFb.alloc(std.testing.allocator);
+    defer logical.deinit(std.testing.allocator);
+    var cnc: CncView = .{};
+    cnc.connected = true;
+    cnc.alarm_code = 3;
+    cnc.state = "Alarm";
+    paintStatus(&logical, tokens.Theme.industrialTealDark(), cnc);
+    try std.testing.expect(!hit_alarm.isEmpty());
+    try std.testing.expectEqual(Hit.alarm, hitStatus(hit_alarm.x + 4, hit_alarm.y + 4));
 }
 
 test "MPG pill label matches LVGL active/off/rem" {

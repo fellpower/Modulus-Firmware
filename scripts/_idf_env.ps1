@@ -7,20 +7,25 @@
 # Pin the env idf_tools built against a supported interpreter instead.
 
 function Set-IdfPythonEnv {
+    # idf.py and a few component messages contain Unicode.  Set both knobs
+    # before export.ps1 starts Python, even when a venv was already selected.
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONIOENCODING = "utf-8"
     if (-not [string]::IsNullOrWhiteSpace($env:IDF_PYTHON_ENV_PATH)) { return }
-    $envRoot = Join-Path $env:USERPROFILE ".espressif\python_env"
-    $pinned = Get-ChildItem -Path $envRoot -Directory -ErrorAction SilentlyContinue |
+    $envRoots = @(
+        (Join-Path $env:USERPROFILE ".espressif\python_env"),
+        "C:\Espressif\python_env"
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    $pinned = Get-ChildItem -Path $envRoots -Directory -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Name -match '_py3\.(9|10|11|12)_env$' -and
+            $_.Name -match '_py3\.(9|10|11|12|13|14)_env$' -and
             (Test-Path (Join-Path $_.FullName "Scripts\python.exe"))
         } |
-        Sort-Object Name -Descending | Select-Object -First 1
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($pinned) {
         $env:IDF_PYTHON_ENV_PATH = $pinned.FullName
         Write-Host "==> IDF_PYTHON_ENV_PATH: $env:IDF_PYTHON_ENV_PATH"
     } else {
-        Write-Warning "No py3.9-3.12 IDF venv under $envRoot - export.ps1 may pick a broken one. Fix: python C:\Espressif\tools\idf-python\<ver>\python.exe `$env:IDF_PATH\tools\idf_tools.py install-python-env"
+        Write-Warning "No ESP-IDF Python environment found under $($envRoots -join ', ')"
     }
-    # idf.py warns and emits mojibake on a non-UTF8 console.
-    if ([string]::IsNullOrWhiteSpace($env:PYTHONUTF8)) { $env:PYTHONUTF8 = "1" }
 }

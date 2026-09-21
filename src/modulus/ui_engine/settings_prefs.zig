@@ -779,6 +779,8 @@ pub const WirelessPrefs = struct {
         poll_interval_s: u16 = 15,
         temperature_centi_c: i16 = 0,
         temperature_state: u8 = 0,
+        /// Factory-unique DS18B20 ROM assigned by the node; all zero means unbound.
+        sensor_rom: [8]u8 = .{0} ** 8,
         digital_value: bool = false,
         digital_state: u8 = 0,
         /// 0=automatic, otherwise a UI icon id chosen by the operator.
@@ -791,6 +793,10 @@ pub const WirelessPrefs = struct {
         temp_alarm_high_centi_c: i16 = 5000,
         temp_alarm_low_centi_c: i16 = -5500,
         temp_alarm_hysteresis_centi_c: u16 = 200,
+        /// 0=notification only, 1=notification + CNC feed hold, 2=turn output off.
+        temp_alarm_action: u8 = 0,
+        /// Node output channel used by action 2; 0xff means not selected.
+        temp_alarm_output_channel: u8 = 0xff,
         temp_alarm_active: bool = false,
     };
     /// 0=hub 1=wifi 2=bt 3=espnow 4=zigbee 5=thread 6=wifi_saved 7=wifi_adv
@@ -919,7 +925,7 @@ pub const WirelessPrefs = struct {
         "Door Light",
         "Bedroom Terrace Door",
     };
-    pub const stub_th = [_][]const u8{ "Matter plug" };
+    pub const stub_th = [_][]const u8{"Matter plug"};
 
     pub fn apLabel(self: *const WirelessPrefs, i: usize) []const u8 {
         if (i < self.live_ap_n) return cstrSlice(&self.live_ap[i]);

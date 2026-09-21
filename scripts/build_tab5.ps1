@@ -17,18 +17,24 @@ if ($RepoRoot -match 'Modulus Firmware') {
 
 function Resolve-ZigExe {
     $cmd = Get-Command zig -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        Write-Error "zig not found - install Zig 0.16+ and ensure it is on PATH"
+    if ($cmd) { return $cmd.Source }
+    $localZig = Join-Path $env:USERPROFILE ".local\zig\0.16.0\zig.exe"
+    if (Test-Path -LiteralPath $localZig) {
+        return $localZig
     }
-    return $cmd.Source
+    Write-Error "zig not found - install Zig 0.16+ or place it under ~/.local/zig/0.16.0"
 }
 
 function Ensure-IdfEnv {
     param([string]$PathOverride)
     if ($PathOverride) { $env:IDF_PATH = $PathOverride }
     if ([string]::IsNullOrWhiteSpace($env:IDF_PATH)) {
-        $default = "C:\Espressif\frameworks\esp-idf-v6.0.1"
-        if (Test-Path -LiteralPath $default) {
+        $defaults = @(
+            "C:\Espressif\v6.0.1\esp-idf",
+            "C:\Espressif\frameworks\esp-idf-v6.0.1"
+        )
+        $default = $defaults | Where-Object { Test-Path -LiteralPath (Join-Path $_ "export.ps1") } | Select-Object -First 1
+        if ($default) {
             $env:IDF_PATH = $default
             Write-Host "==> IDF_PATH default: $env:IDF_PATH"
         }

@@ -986,6 +986,7 @@ pub fn paintPowerMenu(
     logical: *fb.LogicalFb,
     theme: tokens.Theme,
     busy: bool,
+    machine_alarm: bool,
     enter_t: f32,
 ) PowerLayout {
     var lay: PowerLayout = .{};
@@ -1011,7 +1012,7 @@ pub fn paintPowerMenu(
     logical.fillRect(.{ .x = hdr.x, .y = hdr.y + power_hdr_h - 1, .w = hdr.w, .h = 1 }, theme.outline_variant);
 
     icons_phosphor.draw(logical, hdr.x + tokens.Space.xl, hdr.y + @divTrunc(power_hdr_h - 24, 2), .power, theme.err);
-    font.drawTextRole(logical, hdr.x + tokens.Space.xl + 36, hdr.y + @divTrunc(power_hdr_h - 22, 2), "Power menu", theme.on_surface, .title_l);
+    font.drawTextRole(logical, hdr.x + tokens.Space.xl + 36, hdr.y + @divTrunc(power_hdr_h - 22, 2), if (machine_alarm) "Machine alarm" else "Power menu", theme.on_surface, .title_l);
 
     lay.close = .{
         .x = hdr.x + hdr.w - power_close_sz - tokens.Space.lg,
@@ -1030,8 +1031,8 @@ pub fn paintPowerMenu(
     y += power_sec_h;
     lay.reset = .{ .x = body_x, .y = y, .w = tile_w, .h = power_tile_h };
     lay.unlock = .{ .x = body_x + tile_w + power_gap, .y = y, .w = tile_w, .h = power_tile_h };
-    paintPowerTile(logical, theme, lay.reset, "Reset CNC", "Soft reset (Ctrl-X)", false, false);
-    paintPowerTile(logical, theme, lay.unlock, "Clear alarm", "Unlock ($X)", false, false);
+    paintPowerTile(logical, theme, lay.reset, if (machine_alarm) "Restart controller" else "Reset CNC", "Soft reset (Ctrl-X)", false, false);
+    paintPowerTile(logical, theme, lay.unlock, if (machine_alarm) "Acknowledge & unlock" else "Clear alarm", "Unlock machine ($X)", false, false);
     y += power_tile_h + power_gap;
 
     font.drawTextRole(logical, body_x + tokens.Space.md, y + 8, "Device power", theme.on_surface, .title_m);

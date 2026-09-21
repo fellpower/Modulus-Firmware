@@ -241,6 +241,22 @@ Copy the matching `modulus-s3-*-ota.bin` from the latest release to the USB stic
 After successful verification select **Restart S3**. Set matching S3 MAC/channel
 under Settings → Wireless if required.
 
+### S3 RGB status LED
+
+| LED indication | Meaning |
+|----------------|---------|
+| Solid green | ESP-NOW connection to the Tab5 is established |
+| Brief cyan/blue-green | UART data was sent to or received from the CNC controller; the indication remains active for about 140 ms |
+| Orange | ESP-NOW transmission error |
+| Flashing violet | Searching for the configured wireless channel |
+| Flashing blue | No connection; normal connection search is in progress |
+| Dim amber | The S3 is still starting up |
+
+The S3 bridge does **not** interpret the CNC machine state. In particular,
+cyan/blue-green activity while the controller is in an alarm state only means
+that UART data is being transferred. It is not an S3 alarm indication. The LED
+returns to solid green when the link is connected and no UART traffic is active.
+
 ---
 
 ## Build from source

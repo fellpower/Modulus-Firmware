@@ -305,6 +305,8 @@ pub const Engine = struct {
     zb_rename_idx: u8 = 0,
     zb_node_channel_idx: u8 = 0,
     zb_temp_alarm_idx: u8 = 0xff,
+    /// Acknowledged active alarms. Cleared automatically when a channel returns safe.
+    zb_temp_alarm_ack_mask: u16 = 0,
     cnc_overlay_fx: spring.Spring = spring.Spring.effects(0),
     dash_overlay: settings_dashboard_modals.Kind = .none,
     dash_wcs_layout: settings_dashboard_modals.WcsLayout = .{},
@@ -1647,7 +1649,8 @@ pub const Engine = struct {
         self.logical.clear(self.theme.surface);
         widgets.fillScrim(&self.logical, self.theme);
         const busy = machineBusy(self.cnc);
-        self.power_layout = settings_form.paintPowerMenu(&self.logical, self.theme, busy, self.power_fx.value);
+        const machine_alarm = self.cnc.alarm_code != 0 or self.cnc.mach_state == 5;
+        self.power_layout = settings_form.paintPowerMenu(&self.logical, self.theme, busy, machine_alarm, self.power_fx.value);
         if (self.power_confirm != .none) {
             const c = settings_form.paintPowerConfirm(&self.logical, self.theme, self.power_confirm, self.power_confirm_fx.value);
             self.power_layout.confirm_ok = c.ok;
@@ -1881,7 +1884,9 @@ pub const Engine = struct {
     /// Drop notifications the operator asked not to see. An offered action
     /// (Undo) always counts as important — muting it would strand the choice.
     fn snackbarAllowed(self: *const Engine, level: SnackLevel, has_action: bool) bool {
-        if (!self.prefs.display.notify_en) return false;
+        // Actionable safety errors (for example a temperature alarm requiring
+        // acknowledgement) must remain visible even when ordinary notices are muted.
+        if (!self.prefs.display.notify_en and !(level == .err and has_action)) return false;
         const eff: u8 = if (has_action) @max(@intFromEnum(level), @intFromEnum(SnackLevel.important)) else @intFromEnum(level);
         return eff >= @min(self.prefs.display.notify_level, @intFromEnum(SnackLevel.err));
     }
@@ -3729,6 +3734,14 @@ pub const Engine = struct {
         self.requestFull();
     }
 
+    fn openSignedNumberForTarget(self: *Engine, target: input_pad.Target, title: []const u8, seed: i32) void {
+        var buf: [16]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d}", .{seed}) catch "0";
+        self.pad.openPad(.number, target, title, s);
+        self.pad.kb_full = self.prefs.system.kb_full;
+        self.requestFull();
+    }
+
     fn openTextPad(self: *Engine, target: input_pad.Target, title: []const u8, seed: []const u8) void {
         self.pad.openPad(.text, target, title, seed);
         self.pad.kb_full = self.prefs.system.kb_full;
@@ -3894,7 +3907,10 @@ pub const Engine = struct {
                 }
             },
             .wl_zb_node_name => {
-                if (txt.len == 0) { self.showSnackbarError("Name required"); return; }
+                if (txt.len == 0) {
+                    self.showSnackbarError("Name required");
+                    return;
+                }
                 _ = self.emitWireless(.{ .zb_node_name = txt });
             },
             .wl_zb_node_channel_name => {
@@ -3908,11 +3924,14 @@ pub const Engine = struct {
             },
             .wl_zb_node_poll => {
                 const seconds = std.fmt.parseInt(u16, txt, 10) catch 0;
-                if (seconds < 15 or seconds > 3600) { self.showSnackbarError("Poll interval: 15-3600 seconds"); return; }
+                if (seconds < 15 or seconds > 3600) {
+                    self.showSnackbarError("Poll interval: 15-3600 seconds");
+                    return;
+                }
                 const i = self.zb_node_channel_idx;
                 if (i < self.prefs.wireless.zb_node_channels.len) {
                     self.prefs.wireless.zb_node_channels[i].poll_interval_s = seconds;
-                    _ = self.emitWireless(.{ .zb_node_poll = .{ .index=i, .seconds=seconds } });
+                    _ = self.emitWireless(.{ .zb_node_poll = .{ .index = i, .seconds = seconds } });
                 }
             },
             .wl_zb_node_alarm_high, .wl_zb_node_alarm_low, .wl_zb_node_alarm_hysteresis => {
@@ -3945,7 +3964,10 @@ pub const Engine = struct {
                     _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
                 }
             } else if (self.pad.parseU32()) |v| {
-                if (v > 30) { self.showSnackbarError("GPIO must be 0 to 30"); return; }
+                if (v > 30) {
+                    self.showSnackbarError("GPIO must be 0 to 30");
+                    return;
+                }
                 const i = self.zb_node_channel_idx;
                 if (i == 0xff) {
                     self.prefs.wireless.zb_node_led_gpio = @intCast(v);
@@ -4184,6 +4206,8 @@ pub const Engine = struct {
             if (self.snack_undo_dark) |d| {
                 self.prefs.display.darkmode = d;
                 self.applyPrefs();
+            } else if (self.zb_temp_alarm_idx < 12) {
+                self.zb_temp_alarm_ack_mask |= @as(u16, 1) << @intCast(self.zb_temp_alarm_idx);
             }
             self.snack_frames = 0;
             self.snack_action_len = 0;
@@ -4916,42 +4940,59 @@ pub const Engine = struct {
                         self.prefs.wireless.zb_node_ready = false;
                         self.prefs.wireless.zb_node_idx = r.aux;
                         _ = self.emitWireless(.{ .zb_node_open = r.aux });
-                        self.requestFull(); return;
+                        self.requestFull();
+                        return;
                     }
                     if (r.hit == .wl_zb_node_close) {
-                        self.prefs.wireless.zb_node_open = false; self.requestFull(); return;
+                        self.prefs.wireless.zb_node_open = false;
+                        self.requestFull();
+                        return;
                     }
                     if (r.hit == .wl_zb_node_name) {
-                        self.openTextPad(.wl_zb_node_name, "Node name", std.mem.sliceTo(&self.prefs.wireless.zb_node_name, 0)); return;
+                        self.openTextPad(.wl_zb_node_name, "Node name", std.mem.sliceTo(&self.prefs.wireless.zb_node_name, 0));
+                        return;
                     }
                     if (r.hit == .wl_zb_node_type) {
-                        const i = r.aux; if (i < self.prefs.wireless.zb_node_channels.len) {
-                            const ch = &self.prefs.wireless.zb_node_channels[i]; ch.typ = (ch.typ + 1) % 5;
+                        const i = r.aux;
+                        if (i < self.prefs.wireless.zb_node_channels.len) {
+                            const ch = &self.prefs.wireless.zb_node_channels[i];
+                            ch.typ = (ch.typ + 1) % 5;
                             _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
                         }
-                        self.requestFull(); return;
+                        self.requestFull();
+                        return;
                     }
                     if (r.hit == .wl_zb_node_gpio) {
                         self.zb_node_channel_idx = r.aux;
                         const gpio = self.prefs.wireless.zb_node_channels[r.aux].gpio;
-                        self.openNumberForTarget(.wl_zb_node_gpio, "GPIO 0-30 (empty = None)", if (gpio < 0) 0 else @intCast(gpio)); return;
+                        self.openNumberForTarget(.wl_zb_node_gpio, "GPIO 0-30 (empty = None)", if (gpio < 0) 0 else @intCast(gpio));
+                        return;
                     }
                     if (r.hit == .wl_zb_node_polarity) {
-                        const i = r.aux; if (i < self.prefs.wireless.zb_node_channels.len) {
-                            const ch = &self.prefs.wireless.zb_node_channels[i]; ch.flags ^= 1;
+                        const i = r.aux;
+                        if (i < self.prefs.wireless.zb_node_channels.len) {
+                            const ch = &self.prefs.wireless.zb_node_channels[i];
+                            ch.flags ^= 1;
                             _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
                         }
-                        self.requestFull(); return;
+                        self.requestFull();
+                        return;
                     }
                     if (r.hit == .wl_zb_node_pullup) {
-                        const i = r.aux; if (i < self.prefs.wireless.zb_node_channels.len) {
-                            const ch = &self.prefs.wireless.zb_node_channels[i]; ch.flags ^= 2;
+                        const i = r.aux;
+                        if (i < self.prefs.wireless.zb_node_channels.len) {
+                            const ch = &self.prefs.wireless.zb_node_channels[i];
+                            ch.flags ^= 2;
                             _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = ch.typ, .gpio = ch.gpio, .flags = ch.flags, .name = std.mem.sliceTo(&ch.name, 0) } });
                         }
-                        self.requestFull(); return;
+                        self.requestFull();
+                        return;
                     }
                     if (r.hit == .wl_zb_node_apply) {
-                        _ = self.emitWireless(.zb_node_apply); self.showSnackbar("Node restarting..."); self.requestFull(); return;
+                        _ = self.emitWireless(.zb_node_apply);
+                        self.showSnackbar("Node restarting...");
+                        self.requestFull();
+                        return;
                     }
                     if (r.hit == .wl_zb_remove) {
                         if (!self.emitWireless(.{ .zb_remove = r.aux })) {
@@ -5111,6 +5152,10 @@ pub const Engine = struct {
 
         // Dashboard
         switch (dashboard.hitStatus(x, y)) {
+            .alarm => {
+                self.openPowerMenu();
+                return;
+            },
             .settings => {
                 self.openSettings();
                 return;
@@ -5734,7 +5779,7 @@ pub const Engine = struct {
             self.showSnackbar("Join hub first");
             return;
         }
-        if (self.emitWireless(.scan)) {
+        if (self.emitWireless(.zb_permit_join)) {
             self.showSnackbar("Permit join - pairing open");
         } else {
             self.prefs.wireless.startZbScan();
@@ -5779,7 +5824,7 @@ pub const Engine = struct {
         const h = m_panel_zigbee.hit(self.m_panel_zb_layout, x, y);
         switch (h.kind) {
             .none => {},
-            .back, .scrim => {
+            .back => {
                 if (self.prefs.wireless.zb_node_open) {
                     self.prefs.wireless.zb_node_open = false;
                     self.requestFull();
@@ -5788,9 +5833,33 @@ pub const Engine = struct {
                 self.closeZbMenu();
                 self.returnToMPanelFromTool();
             },
+            .scrim => {
+                // Configuration is a data-entry view. Ignore stray taps just
+                // outside the panel so they cannot discard it accidentally.
+                if (self.prefs.wireless.zb_node_open) return;
+                self.closeZbMenu();
+                self.returnToMPanelFromTool();
+            },
             .exit => {
                 self.closeZbMenu();
                 self.closeToolToDashboard();
+            },
+            .radio_toggle => {
+                self.prefs.wireless.zigbee = !self.prefs.wireless.zigbee;
+                self.applyPrefs();
+                if (self.prefs.wireless.zigbee) {
+                    self.prefs.wireless.zb_joined = false;
+                    if (!self.emitWireless(.zb_join)) {
+                        self.prefs.wireless.joinZigbee();
+                    } else {
+                        self.prefs.wireless.zb_join_pending = true;
+                    }
+                    self.showSnackbar("Starting Zigbee...");
+                } else {
+                    self.prefs.wireless.zb_join_pending = false;
+                    self.showSnackbar("Zigbee radio off");
+                }
+                self.requestFull();
             },
             .permit_join => self.startZbPermitJoin(),
             .refresh => {
@@ -5914,6 +5983,10 @@ pub const Engine = struct {
                 _ = self.emitWireless(.{ .zb_node_open = h.dev });
                 self.requestFull();
             },
+            .rename => {
+                self.zb_rename_idx = h.dev;
+                self.openTextPad(.wl_zb_name, "Device name", self.prefs.wireless.zbDevLabel(h.dev));
+            },
             .node_name => self.openTextPad(.wl_zb_node_name, "Node name", std.mem.sliceTo(&self.prefs.wireless.zb_node_name, 0)),
             .node_channel_name => {
                 self.zb_node_channel_idx = h.dev;
@@ -5973,16 +6046,40 @@ pub const Engine = struct {
             .node_alarm_high => {
                 self.zb_node_channel_idx = h.dev;
                 const v = @divTrunc(self.prefs.wireless.zb_node_channels[h.dev].temp_alarm_high_centi_c, 100);
-                self.openNumberForTarget(.wl_zb_node_alarm_high, "High alarm in degrees Celsius", @intCast(@max(0, v)));
+                self.openSignedNumberForTarget(.wl_zb_node_alarm_high, "High alarm in degrees Celsius", v);
             },
             .node_alarm_low => {
                 self.zb_node_channel_idx = h.dev;
                 const v = @divTrunc(self.prefs.wireless.zb_node_channels[h.dev].temp_alarm_low_centi_c, 100);
-                self.openNumberForTarget(.wl_zb_node_alarm_low, "Low alarm in degrees Celsius", @intCast(@max(0, v)));
+                self.openSignedNumberForTarget(.wl_zb_node_alarm_low, "Low alarm in degrees Celsius", v);
             },
             .node_alarm_hysteresis => {
                 self.zb_node_channel_idx = h.dev;
                 self.openNumberForTarget(.wl_zb_node_alarm_hysteresis, "Hysteresis in whole degrees Celsius", self.prefs.wireless.zb_node_channels[h.dev].temp_alarm_hysteresis_centi_c / 100);
+            },
+            .node_alarm_action => {
+                const ch = &self.prefs.wireless.zb_node_channels[h.dev];
+                ch.temp_alarm_action = (ch.temp_alarm_action + 1) % 3;
+                self.applyPrefs();
+                self.requestFull();
+            },
+            .node_alarm_output => {
+                const source = &self.prefs.wireless.zb_node_channels[h.dev];
+                const count = @min(self.prefs.wireless.zb_node_channel_count, @as(u8, @intCast(self.prefs.wireless.zb_node_channels.len)));
+                var candidate: u8 = if (source.temp_alarm_output_channel == 0xff) 0 else source.temp_alarm_output_channel +% 1;
+                var checked: u8 = 0;
+                source.temp_alarm_output_channel = 0xff;
+                while (checked < count) : (checked += 1) {
+                    if (candidate >= count) candidate = 0;
+                    const target = &self.prefs.wireless.zb_node_channels[candidate];
+                    if (target.typ == 1 or target.typ == 2) {
+                        source.temp_alarm_output_channel = candidate;
+                        break;
+                    }
+                    candidate +%= 1;
+                }
+                self.applyPrefs();
+                self.requestFull();
             },
             .node_polarity => {
                 const i = h.dev;
@@ -6021,7 +6118,7 @@ pub const Engine = struct {
                     self.prefs.wireless.zb_node_channels[i] = .{};
                     self.prefs.wireless.zb_node_channel_count += 1;
                     self.prefs.wireless.zb_node_page = i + 1;
-                    _ = self.emitWireless(.{ .zb_node_channel = .{ .index=i, .typ=0, .gpio=-1, .flags=0, .name="Channel" } });
+                    _ = self.emitWireless(.{ .zb_node_channel = .{ .index = i, .typ = 0, .gpio = -1, .flags = 0, .name = "Channel" } });
                 }
                 self.requestFull();
             },
@@ -6070,8 +6167,17 @@ pub const Engine = struct {
             self.m_panel_sd_catalog.refresh(self.prefs.storage.sd == .mounted);
         }
         if (index == @intFromEnum(m_panel.ToolId.zigbee)) {
-            if (!self.prefs.wireless.zigbee) self.prefs.wireless.zigbee = true;
-            _ = self.emitWireless(.zb_refresh);
+            if (self.prefs.wireless.zigbee) {
+                if (self.prefs.wireless.zb_joined) {
+                    _ = self.emitWireless(.zb_refresh);
+                } else if (!self.prefs.wireless.zb_join_pending) {
+                    if (!self.emitWireless(.zb_join)) {
+                        self.prefs.wireless.joinZigbee();
+                    } else {
+                        self.prefs.wireless.zb_join_pending = true;
+                    }
+                }
+            }
         }
         if (index == @intFromEnum(m_panel.ToolId.firmware_update)) {
             if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
@@ -6129,8 +6235,12 @@ pub const Engine = struct {
                 if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
             },
             .s3 => {
-                self.m_panel_s3_ota_state.view = .firmware;
+                // The S3 landing page contains both Firmware Update and the
+                // remote UART pin/baud configuration. Jumping straight to
+                // .firmware made UART Settings impossible to reach.
+                self.m_panel_s3_ota_state.view = .dashboard;
                 if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
             },
             .nano => {
                 self.m_panel_nano_ota_state.view = .firmware;
@@ -6231,8 +6341,14 @@ pub const Engine = struct {
                         self.returnToMPanelFromTool();
                     },
                     .exit => self.closeToolToDashboard(),
-                    .prev => { self.m_panel_controls_page -|= 1; self.requestFull(); },
-                    .next => { self.m_panel_controls_page = @min(1, self.m_panel_controls_page + 1); self.requestFull(); },
+                    .prev => {
+                        self.m_panel_controls_page -|= 1;
+                        self.requestFull();
+                    },
+                    .next => {
+                        self.m_panel_controls_page = @min(2, self.m_panel_controls_page + 1);
+                        self.requestFull();
+                    },
                     .toggle => {
                         if (h.channel < self.prefs.wireless.zb_node_channel_count) {
                             if (self.m_panel_quick_slot < 3) {
@@ -6248,7 +6364,7 @@ pub const Engine = struct {
                     .configure => {
                         if (h.channel < self.prefs.wireless.zb_node_channel_count and self.m_panel_quick_slot < 3) {
                             self.assignQuickControl(h.channel);
-                        } else if (h.channel < 8) {
+                        } else if (h.channel < self.prefs.wireless.zb_node_channels.len) {
                             self.prefs.wireless.zb_node_open = true;
                             self.prefs.wireless.zb_node_page = h.channel + 1;
                             self.m_panel_tool = @intFromEnum(m_panel.ToolId.zigbee);
@@ -6409,6 +6525,15 @@ pub const Engine = struct {
                 } else {
                     self.m_panel_tool = @intFromEnum(m_panel.ToolId.controls);
                     self.m_panel_quick_slot = h.index;
+                    snapEnter(&self.m_panel_fx);
+                    self.requestFull();
+                }
+            },
+            .configure => {
+                if (h.channel < self.prefs.wireless.zb_node_channel_count) {
+                    self.prefs.wireless.zb_node_open = true;
+                    self.prefs.wireless.zb_node_page = h.channel + 1;
+                    self.m_panel_tool = @intFromEnum(m_panel.ToolId.zigbee);
                     snapEnter(&self.m_panel_fx);
                     self.requestFull();
                 }
@@ -6727,28 +6852,54 @@ pub const Engine = struct {
 
     fn updateZbTemperatureAlarms(self: *Engine) void {
         var active: u8 = 0xff;
-        for (self.prefs.wireless.zb_node_channels[0..8], 0..) |*ch, i| {
+        for (self.prefs.wireless.zb_node_channels[0..], 0..) |*ch, i| {
             if (!ch.temp_alarm_enabled or ch.typ != 4 or ch.temperature_state != 1) {
                 ch.temp_alarm_active = false;
+                self.zb_temp_alarm_ack_mask &= ~(@as(u16, 1) << @intCast(i));
                 continue;
             }
             const t = ch.temperature_centi_c;
             const hyst: i32 = ch.temp_alarm_hysteresis_centi_c;
-            if (!ch.temp_alarm_active) {
+            const was_active = ch.temp_alarm_active;
+            if (!was_active) {
                 ch.temp_alarm_active = t >= ch.temp_alarm_high_centi_c or t <= ch.temp_alarm_low_centi_c;
+                if (ch.temp_alarm_active) self.zb_temp_alarm_ack_mask &= ~(@as(u16, 1) << @intCast(i));
             } else {
                 ch.temp_alarm_active = @as(i32, t) >= @as(i32, ch.temp_alarm_high_centi_c) - hyst or
                     @as(i32, t) <= @as(i32, ch.temp_alarm_low_centi_c) + hyst;
             }
-            if (ch.temp_alarm_active and active == 0xff) active = @intCast(i);
+            if (!ch.temp_alarm_active) self.zb_temp_alarm_ack_mask &= ~(@as(u16, 1) << @intCast(i));
+            if (!was_active and ch.temp_alarm_active and ch.temp_alarm_action == 1 and
+                self.cnc.connected and self.cnc.actions.phase == .run)
+            {
+                _ = self.emitCnc(.feed_hold);
+            } else if (!was_active and ch.temp_alarm_active and ch.temp_alarm_action == 2) {
+                const target_idx = ch.temp_alarm_output_channel;
+                if (target_idx < self.prefs.wireless.zb_node_channel_count) {
+                    const target = &self.prefs.wireless.zb_node_channels[target_idx];
+                    if (target.typ == 1 or target.typ == 2) {
+                        target.digital_value = false;
+                        _ = self.emitWireless(.{ .zb_node_output = .{ .index = target_idx, .on = false } });
+                    }
+                }
+            }
+            if (ch.temp_alarm_active and active == 0xff and
+                (self.zb_temp_alarm_ack_mask & (@as(u16, 1) << @intCast(i))) == 0) active = @intCast(i);
         }
         if (active != 0xff and (self.zb_temp_alarm_idx != active or self.snack_frames == 0)) {
             self.zb_temp_alarm_idx = active;
             const ch = &self.prefs.wireless.zb_node_channels[active];
             var msg: [96]u8 = undefined;
             const name = std.mem.sliceTo(&ch.name, 0);
-            const text = std.fmt.bufPrint(&msg, "Temperature alarm: {s} {d:.1} C", .{ if (name.len == 0) "Channel" else name, @as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0 }) catch "Temperature alarm";
-            self.showSnackbarError(text);
+            const high = ch.temperature_centi_c >= ch.temp_alarm_high_centi_c;
+            const text = std.fmt.bufPrint(&msg, "{s}: {d:.1} C {s} {d:.1} C", .{
+                if (name.len == 0) "Temperature alarm" else name,
+                @as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0,
+                if (high) "> high" else "< low",
+                @as(f32, @floatFromInt(if (high) ch.temp_alarm_high_centi_c else ch.temp_alarm_low_centi_c)) / 100.0,
+            }) catch "Temperature alarm";
+            self.snack_level = .err;
+            self.showSnackbarAction(text, "Acknowledge", null);
             self.snack_frames = std.math.maxInt(u32);
         } else if (active == 0xff and self.zb_temp_alarm_idx != 0xff) {
             self.zb_temp_alarm_idx = 0xff;
@@ -9137,4 +9288,42 @@ test "device applyPrefs preserves live feed when sink installed" {
     eng.applyPrefsPublic();
     try std.testing.expectEqual(@as(u8, 140), eng.cnc.feed_pct);
     try std.testing.expectEqual(@as(u8, 3), eng.cnc.wcs_i);
+}
+
+test "temperature alarm stays active after acknowledgement and clears in safe band" {
+    var eng = try Engine.create(std.testing.allocator);
+    defer eng.destroy(std.testing.allocator);
+    const ch = &eng.prefs.wireless.zb_node_channels[3];
+    ch.typ = 4;
+    ch.temperature_state = 1;
+    ch.temp_alarm_enabled = true;
+    ch.temp_alarm_low_centi_c = 1000;
+    ch.temp_alarm_high_centi_c = 5000;
+    ch.temp_alarm_hysteresis_centi_c = 200;
+    ch.temperature_centi_c = 6500;
+
+    eng.updateZbTemperatureAlarms();
+    try std.testing.expect(ch.temp_alarm_active);
+    try std.testing.expectEqual(@as(u8, 3), eng.zb_temp_alarm_idx);
+    try std.testing.expectEqualStrings("Acknowledge", eng.snack_action_buf[0..eng.snack_action_len]);
+
+    eng.zb_temp_alarm_ack_mask |= @as(u16, 1) << 3;
+    eng.updateZbTemperatureAlarms();
+    try std.testing.expect(ch.temp_alarm_active);
+    try std.testing.expectEqual(@as(u8, 0xff), eng.zb_temp_alarm_idx);
+
+    ch.temperature_centi_c = 2400;
+    eng.updateZbTemperatureAlarms();
+    try std.testing.expect(!ch.temp_alarm_active);
+    try std.testing.expectEqual(@as(u16, 0), eng.zb_temp_alarm_ack_mask & (@as(u16, 1) << 3));
+}
+
+test "S3 target opens landing page so UART settings remain reachable" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    eng.openFirmwareTarget(.s3);
+    try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.s3_update), eng.m_panel_tool);
+    try std.testing.expectEqual(m_panel_s3_ota.View.dashboard, eng.m_panel_s3_ota_state.view);
 }

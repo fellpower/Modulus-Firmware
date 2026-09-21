@@ -95,6 +95,11 @@ fn parseStateToken(p: anytype, token: []const u8) void {
     inline for (state_tags) |tag| {
         if (std.mem.eql(u8, name, tag.name)) {
             p.status.state = tag.state;
+            // alarm_code describes the currently active machine state, not
+            // alarm history. grblHAL reports Idle after a successful unlock;
+            // retaining the previous ALARM:x here kept the Tab5 alarm badge
+            // latched even though the controller was already idle.
+            if (tag.state != .alarm) p.status.alarm_code = 0;
             switch (tag.sub_field) {
                 .none => {},
                 .run => p.status.run_substate = sub,

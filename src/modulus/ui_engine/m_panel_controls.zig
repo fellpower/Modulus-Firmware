@@ -1,4 +1,4 @@
-//! Eight Node controls, four large cards per page.
+//! Twelve Node controls, four large cards per page.
 const std = @import("std");
 const geom = @import("geom.zig");
 const tokens = @import("tokens.zig");
@@ -15,7 +15,7 @@ const panel_cyan = color.Rgb565.fromHex(0x18C8FF);
 const panel_text = color.Rgb565.fromHex(0xF4FAFF);
 const panel_muted = color.Rgb565.fromHex(0xA9C7E5);
 
-pub const Layout = struct { header: chrome.Header = .{}, cards: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, toggles: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, prev: geom.Rect = .{}, next: geom.Rect = .{} };
+pub const Layout = struct { header: chrome.Header = .{}, cards: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, toggles: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, configure: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, prev: geom.Rect = .{}, next: geom.Rect = .{} };
 pub const Kind = enum { none, back, exit, configure, toggle, prev, next };
 pub const Hit = struct { kind: Kind = .none, channel: u8 = 0 };
 
@@ -64,7 +64,9 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
     const y0 = shell.y + 102;
     const cw = @divTrunc(shell.w - 56 - gap, 2);
     const chh: i32 = 238;
-    const first: u8 = @as(u8, @min(page, 1)) * 4;
+    const page_count: u8 = @max(1, @divTrunc(@min(count, 12) + 3, 4));
+    const current_page: u8 = @min(page, page_count - 1);
+    const first: u8 = current_page * 4;
     for (0..4) |slot| {
         const col: i32 = @intCast(slot % 2);
         const row: i32 = @intCast(slot / 2);
@@ -73,7 +75,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
         widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card);
         widgets.strokeRoundRect(logical, r, tokens.Shape.lg, panel_cyan, 2);
         const idx: u8 = first + @as(u8, @intCast(slot));
-        if (idx >= @min(count, 8)) {
+        if (idx >= @min(count, 12)) {
             font.drawTextRole(logical, r.x + 28, r.y + 92, "Not configured", panel_muted, .title_m);
             continue;
         }
@@ -82,15 +84,21 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
         var name_buf: [24]u8 = undefined;
         font.drawTextRole(logical, r.x + 92, r.y + 28, channelName(&c, idx, &name_buf), panel_text, .title_l);
         var value_buf: [32]u8 = undefined;
-        const value: []const u8 = if (c.typ == 4 and c.temperature_state == 1)
-            std.fmt.bufPrint(&value_buf, "{d:.1} C", .{@as(f32, @floatFromInt(c.temperature_centi_c)) / 100.0}) catch "Temperature"
-        else if (c.typ == 3 and c.digital_state == 1) (if (c.digital_value) "HIGH" else "LOW") else if (c.typ == 1 or c.typ == 2) (if (c.digital_value) "ON" else "OFF") else "Unavailable";
-        font.drawTextRole(logical, r.x + 92, r.y + 82, value, if (c.temp_alarm_active) theme.err else panel_cyan, .title_m);
+        const value: []const u8 = if (c.typ == 4) switch (c.temperature_state) {
+            0 => "Waiting for reading",
+            1 => std.fmt.bufPrint(&value_buf, "{d:.1} C", .{@as(f32, @floatFromInt(c.temperature_centi_c)) / 100.0}) catch "Temperature",
+            2 => "Sensor error",
+            3 => "Node offline / stale",
+            4 => "Apply pending",
+            else => "Unavailable",
+        } else if (c.typ == 3 and c.digital_state == 1) (if (c.digital_value) "HIGH" else "LOW") else if (c.typ == 1 or c.typ == 2) (if (c.digital_value) "ON" else "OFF") else "Unavailable";
+        const value_color = if (c.temp_alarm_active or (c.typ == 4 and (c.temperature_state == 2 or c.temperature_state == 3))) theme.err else panel_cyan;
+        font.drawTextRole(logical, r.x + 92, r.y + 82, value, value_color, .title_m);
+        lay.configure[slot] = .{ .x = r.x + 28, .y = r.y + 148, .w = 190, .h = 62 };
+        widgets.drawFilledButton(logical, lay.configure[slot], "Configure", theme);
         if (c.typ == 1 or c.typ == 2) {
             lay.toggles[slot] = .{ .x = r.x + r.w - 190, .y = r.y + 138, .w = 150, .h = 72 };
             paintLargeSwitch(logical, lay.toggles[slot], c.digital_value);
-        } else {
-            font.drawTextRole(logical, r.x + 92, r.y + 154, "Tap card to configure", panel_muted, .body_m);
         }
     }
     lay.prev = .{ .x = shell.x + 28, .y = shell.y + shell.h - 66, .w = 180, .h = 52 };
@@ -98,7 +106,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
     widgets.drawTonalButton(logical, lay.prev, "Previous", theme);
     widgets.drawTonalButton(logical, lay.next, "Next", theme);
     var pbuf: [20]u8 = undefined;
-    const ptxt = std.fmt.bufPrint(&pbuf, "Page {d} of 2", .{@min(page, 1) + 1}) catch "Page";
+    const ptxt = std.fmt.bufPrint(&pbuf, "Page {d} of {d}", .{ current_page + 1, page_count }) catch "Page";
     const tw = font.textWidthStr(ptxt, .body_m);
     font.drawTextRole(logical, shell.x + @divTrunc(shell.w - tw, 2), lay.prev.y + 14, ptxt, panel_muted, .body_m);
     return lay;
@@ -110,8 +118,9 @@ pub fn hit(lay: Layout, page: u8, x: i32, y: i32) Hit {
     if (lay.prev.contains(x, y)) return .{ .kind = .prev };
     if (lay.next.contains(x, y)) return .{ .kind = .next };
     for (0..4) |i| {
-        const channel: u8 = @as(u8, @min(page, 1)) * 4 + @as(u8, @intCast(i));
+        const channel: u8 = @as(u8, @min(page, 2)) * 4 + @as(u8, @intCast(i));
         if (lay.toggles[i].contains(x, y)) return .{ .kind = .toggle, .channel = channel };
+        if (lay.configure[i].contains(x, y)) return .{ .kind = .configure, .channel = channel };
         if (lay.cards[i].contains(x, y)) return .{ .kind = .configure, .channel = channel };
     }
     return .{};

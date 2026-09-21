@@ -267,6 +267,8 @@ static void zigbee_rx(const uint8_t *payload, uint16_t len, void *ctx)
                 memset(channel, 0, sizeof(*channel));
                 channel->poll_interval_s = (s_node_info.protocol_version >= 3 && n >= (size_t)p[4]+7) ? ((uint16_t)p[5+p[4]]<<8)|p[6+p[4]] : 15;
                 channel->apply_pending = s_node_info.protocol_version >= 3 && n >= (size_t)p[4]+8 && p[7+p[4]];
+                if (s_node_info.protocol_version >= 4 && n >= (size_t)p[4]+16)
+                    memcpy(channel->sensor_rom, p + 8 + p[4], 8);
                 channel->index = p[0]; channel->type = p[1]; channel->gpio = (int8_t)p[2]; channel->flags = p[3];
                 const size_t name_len = p[4] < sizeof(channel->name) - 1 ? p[4] : sizeof(channel->name) - 1;
                 memcpy(channel->name, p + 5, name_len); channel->valid = true;
@@ -589,14 +591,6 @@ bool modulus_wireless_zb_set_level(const modulus_zb_device_t *dev, uint8_t level
     ESP_LOGI(TAG, "Zigbee ZCL Level -> 0x%04x ep%u %u", dev->short_addr,
              (unsigned)cmd[3], (unsigned)cmd[4]);
     return true;
-}
-
-bool modulus_wireless_zb_node_set_output(uint16_t short_addr, uint8_t index, bool on)
-{
-    if (short_addr == 0 || index >= 12) return false;
-    uint8_t cmd[] = {ZIGBEE_CMD_ONOFF, (uint8_t)(short_addr >> 8),
-                     (uint8_t)short_addr, (uint8_t)(10 + index), on ? 1 : 0};
-    return modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
 }
 
 bool modulus_wireless_zb_cover(const modulus_zb_device_t *dev, uint8_t op)

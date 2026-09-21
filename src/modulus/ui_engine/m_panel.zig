@@ -67,6 +67,7 @@ pub const Hit = enum {
     close,
     tile,
     favorite,
+    configure,
 };
 
 pub const HitInfo = struct {
@@ -83,6 +84,7 @@ pub const Layout = struct {
     tiles: [32]geom.Rect = [_]geom.Rect{.{}} ** 32,
     tool_indices: [32]u8 = [_]u8{0xff} ** 32,
     quick: [4]geom.Rect = [_]geom.Rect{.{}} ** 4,
+    quick_configure: [3]geom.Rect = [_]geom.Rect{.{}} ** 3,
     tile_n: u8 = 0,
     favorite_channels: [3]u8 = .{ 0xff, 0xff, 0xff },
     scroll_max: i32 = 0,
@@ -260,13 +262,16 @@ pub fn paint(
             widgets.strokeRoundRect(logical, r, tokens.Shape.lg, panel_cyan, 2);
             icons_phosphor.draw(logical, r.x + 32, r.y + 36, .cards_three, panel_cyan);
             font.drawTextRole(logical, r.x + 92, r.y + 30, "All controls", panel_text, .title_l);
-            font.drawTextRole(logical, r.x + 92, r.y + 86, "8 channels  |  2 pages", panel_muted, .body_m);
+            font.drawTextRole(logical, r.x + 92, r.y + 86, "12 channels  |  3 pages", panel_muted, .body_m);
             widgets.drawFilledButton(logical, .{ .x = r.x + 32, .y = r.y + 150, .w = r.w - 64, .h = 64 }, "Open controls", theme);
             continue;
         }
         var found: u8 = 0xff;
         var ci: u8 = 0;
-        while (ci < @min(channel_count, 8)) : (ci += 1) if (channels[ci].favorite == pos + 1) { found = ci; break; };
+        while (ci < @min(channel_count, 12)) : (ci += 1) if (channels[ci].favorite == pos + 1) {
+            found = ci;
+            break;
+        };
         lay.favorite_channels[pos] = found;
         if (found == 0xff) {
             widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card);
@@ -289,9 +294,21 @@ pub fn paint(
             icons_phosphor.draw(logical, r.x + 32, r.y + 36, if (ch.typ == 4) .thermometer_simple else .plugs, if (ch.temp_alarm_active) theme.err else panel_cyan);
             font.drawTextRole(logical, r.x + 92, r.y + 30, label, panel_text, .title_l);
             var state_buf: [24]u8 = undefined;
-            const state = if (ch.typ == 4 and ch.temperature_state == 1) std.fmt.bufPrint(&state_buf, "{d:.1} C", .{@as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0}) catch "" else if (ch.digital_value) "ON" else "OFF";
-            font.drawTextRole(logical, r.x + 92, r.y + 86, state, if (ch.temp_alarm_active) theme.err else theme.primary, .title_m);
-            if (ch.typ == 1 or ch.typ == 2) paintLargeSwitch(logical, .{ .x = r.x + 32, .y = r.y + 150, .w = r.w - 64, .h = 64 }, ch.digital_value);
+            const state = if (ch.typ == 4) switch (ch.temperature_state) {
+                0 => "Waiting for reading",
+                1 => std.fmt.bufPrint(&state_buf, "{d:.1} C", .{@as(f32, @floatFromInt(ch.temperature_centi_c)) / 100.0}) catch "Temperature",
+                2 => "Sensor error",
+                3 => "Node offline / stale",
+                4 => "Apply pending",
+                else => "Unavailable",
+            } else if (ch.digital_value) "ON" else "OFF";
+            const state_color = if (ch.temp_alarm_active or (ch.typ == 4 and (ch.temperature_state == 2 or ch.temperature_state == 3))) theme.err else theme.primary;
+            font.drawTextRole(logical, r.x + 92, r.y + 86, state, state_color, .title_m);
+            lay.quick_configure[pos] = .{ .x = r.x + 24, .y = r.y + 158, .w = 112, .h = 56 };
+            widgets.drawFilledButton(logical, lay.quick_configure[pos], "Configure", theme);
+            if (ch.typ == 1 or ch.typ == 2) {
+                paintLargeSwitch(logical, .{ .x = r.x + 148, .y = r.y + 158, .w = r.w - 172, .h = 56 }, ch.digital_value);
+            }
         }
     }
 
@@ -316,6 +333,9 @@ pub fn paint(
 pub fn hit(layout: Layout, x: i32, y: i32, usb_host: bool) HitInfo {
     if (layout.close.contains(x, y)) return .{ .kind = .close };
     if (!layout.card.contains(x, y)) return .{ .kind = .scrim };
+    for (layout.quick_configure, 0..) |r, qi| if (r.contains(x, y) and layout.favorite_channels[qi] != 0xff) {
+        return .{ .kind = .configure, .index = @intCast(qi), .channel = layout.favorite_channels[qi] };
+    };
     for (layout.quick, 0..) |r, qi| if (r.contains(x, y)) {
         if (qi == 3) return .{ .kind = .tile, .index = @intFromEnum(ToolId.controls) };
         return .{ .kind = .favorite, .index = @intCast(qi), .channel = layout.favorite_channels[qi] };

@@ -274,6 +274,7 @@ fn syncZbNode(eng: *Engine) void {
         dst.poll_interval_s = channel.poll_interval_s;
         dst.temperature_centi_c = channel.temperature_centi_c;
         dst.temperature_state = channel.temperature_state;
+        @memcpy(dst.sensor_rom[0..], channel.sensor_rom[0..]);
         dst.digital_value = channel.digital_value;
         dst.digital_state = channel.digital_state;
         dst.typ = channel.type;
@@ -736,6 +737,17 @@ pub fn wirelessCmd(eng: *Engine, cmd: ui_engine.engine.WirelessUiCmd) void {
                 eng.showSnackbarError("Zigbee join failed — radio / UART");
             } else {
                 eng.prefs.wireless.zb_join_pending = true;
+            }
+        },
+        .zb_permit_join => {
+            const w = &eng.prefs.wireless;
+            w.startZbScan();
+            w.zb_scan_hw = true;
+            if (!c.modulus_wireless_zigbee_scan_start()) {
+                w.zb_scan_hw = false;
+                w.zb_scan_phase = 2;
+                w.zb_scan_n = 0;
+                eng.showSnackbarError("Zigbee pairing failed - NanoH2 link");
             }
         },
         .zb_leave => {

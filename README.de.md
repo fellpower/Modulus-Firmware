@@ -64,6 +64,23 @@ Das passende `modulus-s3-*-ota.bin` aus dem neuesten Release ins Hauptverzeichni
 Nach erfolgreicher Prüfung **Restart S3** drücken. Bei Bedarf S3-MAC und
 passenden Funkkanal unter Settings → Wireless eintragen.
 
+## S3-RGB-Status-LED
+
+| LED-Anzeige | Bedeutung |
+|-------------|-----------|
+| Grün dauerhaft | Die ESP-NOW-Verbindung zum Tab5 steht |
+| Kurz Cyan/Blaugrün | UART-Daten wurden zur CNC-Steuerung gesendet oder von ihr empfangen; die Anzeige bleibt etwa 140 ms aktiv |
+| Orange | ESP-NOW-Sendefehler |
+| Violett blinkend | Suche nach dem eingestellten Funkkanal |
+| Blau blinkend | Keine Verbindung; die normale Verbindungssuche läuft |
+| Dunkles Amber | Der S3 startet noch |
+
+Die S3-Bridge wertet den Maschinenzustand der CNC **nicht** aus. Insbesondere
+bedeutet eine cyan- beziehungsweise blaugrüne Anzeige während eines Alarms nur,
+dass UART-Daten übertragen werden. Sie ist keine Alarmanzeige des S3. Sobald die
+Verbindung steht und kein UART-Verkehr stattfindet, leuchtet die LED wieder
+dauerhaft grün.
+
 ## Aus dem Quellcode bauen
 
 ESP-IDF 6.0.1 und Zig 0.16 verwenden. P4 über `scripts/build_tab5.ps1` bauen;

@@ -50,6 +50,10 @@ fn paceFrame(frame_start_ms: u64) void {
 fn runWindow(gpa: std.mem.Allocator, io: std.Io) !void {
     var eng = try ui_engine.engine.Engine.create(gpa);
     defer eng.destroy(gpa);
+    eng.prefs.wireless.zb_node_ready = true;
+    eng.prefs.wireless.zb_node_short = 0x1234;
+    const demo_node_name = "Workshop Node";
+    @memcpy(eng.prefs.wireless.zb_node_name[0..demo_node_name.len], demo_node_name);
     eng.prefs.wireless.zb_node_channel_count = 8;
     for (eng.prefs.wireless.zb_node_channels[0..8], 0..) |*ch, i| {
         ch.typ = if (i == 3) 4 else 2;
@@ -57,7 +61,7 @@ fn runWindow(gpa: std.mem.Allocator, io: std.Io) !void {
         ch.digital_value = i < 2;
         ch.temperature_state = if (i == 3) 1 else 0;
         ch.temperature_centi_c = if (i == 3) 2475 else 0;
-        ch.favorite = if (i < 3) @intCast(i + 1) else 0;
+        ch.favorite = if (i < 2) @intCast(i + 1) else if (i == 3) 3 else 0;
         const names = [_][]const u8{ "Dust extractor", "Work light", "Air valve", "Coolant water", "Relay 5", "Relay 6", "Relay 7", "Relay 8" };
         @memcpy(ch.name[0..names[i].len], names[i]);
     }
@@ -68,7 +72,8 @@ fn runWindow(gpa: std.mem.Allocator, io: std.Io) !void {
     const hello =
         \\Modulus UI Engine — gestures + boot splash ~3s
         \\  Tap / double-tap status / long-press | wheel scroll
-        \\  T theme | D dialog | P PIN | M catalog | Space QS | Esc quit
+        \\  T theme | D dialog | P PIN | M panel | Space QS | Esc quit
+        \\  F5 low alarm | F6 normal | F7 high alarm | F8 sensor error/stale
         \\
     ;
     try std.Io.File.stdout().writeStreamingAll(io, hello);
@@ -111,6 +116,29 @@ fn runWindow(gpa: std.mem.Allocator, io: std.Io) !void {
         if (input.key_tab) eng.handleFocusTab(false);
         if (input.key_shift_tab) eng.handleFocusTab(true);
         if (input.key_enter) eng.activateFocus();
+        const demo_temp = &eng.prefs.wireless.zb_node_channels[3];
+        if (input.key_temp_low) {
+            demo_temp.temperature_state = 1;
+            demo_temp.temperature_centi_c = -6000;
+            demo_temp.temp_alarm_enabled = true;
+            eng.requestFull();
+        }
+        if (input.key_temp_normal) {
+            demo_temp.temperature_state = 1;
+            demo_temp.temperature_centi_c = 2475;
+            demo_temp.temp_alarm_enabled = true;
+            eng.requestFull();
+        }
+        if (input.key_temp_high) {
+            demo_temp.temperature_state = 1;
+            demo_temp.temperature_centi_c = 6500;
+            demo_temp.temp_alarm_enabled = true;
+            eng.requestFull();
+        }
+        if (input.key_temp_fault) {
+            demo_temp.temperature_state = if (demo_temp.temperature_state == 2) 3 else 2;
+            eng.requestFull();
+        }
 
         // Pointer → gesture recognizer (tap on up; keep handleClick for tests).
         if (input.click_x >= 0) {

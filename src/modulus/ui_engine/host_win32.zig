@@ -25,6 +25,10 @@ pub const Input = struct {
     key_tab: bool = false,
     key_shift_tab: bool = false,
     key_enter: bool = false,
+    key_temp_low: bool = false,
+    key_temp_normal: bool = false,
+    key_temp_high: bool = false,
+    key_temp_fault: bool = false,
     /// Typed chars this frame (search); 0-terminated in practice via len.
     chars: [8]u8 = .{0} ** 8,
     chars_len: usize = 0,
@@ -172,6 +176,22 @@ pub const View = struct {
         if (g_enter) {
             input.key_enter = true;
             g_enter = false;
+        }
+        if (g_temp_low) {
+            input.key_temp_low = true;
+            g_temp_low = false;
+        }
+        if (g_temp_normal) {
+            input.key_temp_normal = true;
+            g_temp_normal = false;
+        }
+        if (g_temp_high) {
+            input.key_temp_high = true;
+            g_temp_high = false;
+        }
+        if (g_temp_fault) {
+            input.key_temp_fault = true;
+            g_temp_fault = false;
         }
         if (g_backspace) {
             input.key_backspace = true;
@@ -376,6 +396,10 @@ var g_catalog: bool = false;
 var g_tab: bool = false;
 var g_shift_tab: bool = false;
 var g_enter: bool = false;
+var g_temp_low: bool = false;
+var g_temp_normal: bool = false;
+var g_temp_high: bool = false;
+var g_temp_fault: bool = false;
 var g_shift_held: bool = false;
 var g_backspace: bool = false;
 var g_chars: [8]u8 = .{0} ** 8;
@@ -432,6 +456,10 @@ fn wndProc(hwnd: ?win.HWND, msg: u32, wparam: win.WPARAM, lparam: win.LPARAM) ca
                 if (g_shift_held) g_shift_tab = true else g_tab = true;
             }
             if (wparam == win.VK_RETURN) g_enter = true;
+            if (wparam == win.VK_F5) g_temp_low = true;
+            if (wparam == win.VK_F6) g_temp_normal = true;
+            if (wparam == win.VK_F7) g_temp_high = true;
+            if (wparam == win.VK_F8) g_temp_fault = true;
             if (wparam == win.VK_ESCAPE) {
                 if (hwnd) |h| _ = win.user32.DestroyWindow(h);
             }
@@ -486,6 +514,10 @@ const win = struct {
     pub const VK_TAB: usize = 0x09;
     pub const VK_RETURN: usize = 0x0D;
     pub const VK_SHIFT: i32 = 0x10;
+    pub const VK_F5: usize = 0x74;
+    pub const VK_F6: usize = 0x75;
+    pub const VK_F7: usize = 0x76;
+    pub const VK_F8: usize = 0x77;
     pub const PM_REMOVE: u32 = 0x0001;
     pub const SW_SHOW: i32 = 5;
     pub const CW_USEDEFAULT: i32 = -2147483648;

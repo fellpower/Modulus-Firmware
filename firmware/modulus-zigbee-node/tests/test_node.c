@@ -46,10 +46,11 @@ int main(void) {
     cfg.poll_interval_s[0]=60; cfg.poll_interval_s[1]=3600;
     assert(mod_node_config_save(&cfg)); mod_node_config_load(&loaded);
     assert(loaded.poll_interval_s[0]==60 && loaded.poll_interval_s[1]==3600);
+    assert(loaded.sensor_rom[0][0]==0);
     cfg.poll_interval_s[0]=14; assert(!mod_node_config_save(&cfg));
     cfg.poll_interval_s[0]=3601; assert(!mod_node_config_save(&cfg));
     cfg.poll_interval_s[0]=15;
-    cfg.channel[1].gpio=22; assert(!mod_node_config_save(&cfg));
+    cfg.channel[1].gpio=22; assert(mod_node_config_save(&cfg)); /* shared OneWire bus */
     cfg.channel[1].type=MOD_NODE_CH_SWITCH; assert(!mod_node_config_save(&cfg));
     cfg.channel[1].gpio=15; assert(!mod_node_config_save(&cfg));
     cfg.channel[1].gpio=12; assert(!mod_node_config_save(&cfg));
@@ -68,7 +69,7 @@ int main(void) {
     nvs_set_blob(1,"config",&old,sizeof(old)); mod_node_config_load(&loaded);
     assert(!strcmp(loaded.device_name,"Existing node")); assert(loaded.channel[0].gpio==22);
     assert(loaded.poll_interval_s[0]==15 && loaded.status_led_active_low);
-    assert(loaded.schema_version==4);
+    assert(loaded.schema_version==5);
     mod_node_config_v2_t older={0}; older.schema_version=2; older.channel_count=4;
     strcpy(older.device_name,"Older node"); memcpy(older.channel,cfg.channel,sizeof(older.channel));
     nvs_set_blob(1,"config",&older,sizeof(older)); mod_node_config_load(&loaded);

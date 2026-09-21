@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
 
     const host_options = b.addOptions();
     host_options.addOption(bool, "device_nvs", false);
-    host_options.addOption([]const u8, "version", "3.1.0");
+    host_options.addOption([]const u8, "version", "3.1.6");
 
     const host_shim_module = b.createModule(.{
         .root_source_file = b.path("src/modulus/c/shim_host_stub.zig"),
@@ -110,7 +110,7 @@ pub fn build(b: *std.Build) void {
     }) catch unreachable);
     const tab5_options = b.addOptions();
     tab5_options.addOption(bool, "device_nvs", true);
-    tab5_options.addOption([]const u8, "version", "3.1.0");
+    tab5_options.addOption([]const u8, "version", "3.1.6");
 
     const tab5_modulus_module = b.createModule(.{
         .root_source_file = b.path("src/modulus/tab5_root.zig"),

@@ -94,6 +94,19 @@ test "cnc: parser ok alarm welcome" {
     try std.testing.expectEqual(ParseEvent.welcome, p.parseLine("GrblHAL 1.1f ['$' for help]"));
 }
 
+test "cnc: Idle status clears the active alarm code" {
+    var p = Parser.init();
+    try std.testing.expectEqual(ParseEvent.alarm, p.parseLine("ALARM:3"));
+    try std.testing.expectEqual(cnc_state.MachineState.alarm, p.status.state);
+    try std.testing.expectEqual(@as(u8, 3), p.status.alarm_code);
+
+    try std.testing.expectEqual(ParseEvent.status_report, p.parseLine("<Idle|MPos:0,0,0>"));
+    try std.testing.expectEqual(cnc_state.MachineState.idle, p.status.state);
+    try std.testing.expectEqual(@as(u8, 0), p.status.alarm_code);
+    // Preserve the historical code for diagnostics and lock decisions.
+    try std.testing.expectEqual(@as(u8, 3), p.last_alarm);
+}
+
 test "cnc: parser SD D Sc TLR In tags" {
     var p = Parser.init();
     _ = p.parseLine("<Idle|MPos:0,0,0|SD:1|D:1|Sc:XY|TLR:1|In:-3>");
