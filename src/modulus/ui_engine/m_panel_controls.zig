@@ -8,12 +8,6 @@ const widgets = @import("widgets.zig");
 const icons = @import("icons_phosphor.zig");
 const prefs = @import("settings_prefs.zig");
 const chrome = @import("m_panel_tool.zig");
-const color = @import("color.zig");
-const panel_bg = color.Rgb565.fromHex(0x001426);
-const panel_card = color.Rgb565.fromHex(0x03233F);
-const panel_cyan = color.Rgb565.fromHex(0x18C8FF);
-const panel_text = color.Rgb565.fromHex(0xF4FAFF);
-const panel_muted = color.Rgb565.fromHex(0xA9C7E5);
 
 pub const Layout = struct { header: chrome.Header = .{}, cards: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, toggles: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, configure: [4]geom.Rect = [_]geom.Rect{.{}} ** 4, prev: geom.Rect = .{}, next: geom.Rect = .{} };
 pub const Kind = enum { none, back, exit, configure, toggle, prev, next };
@@ -35,20 +29,20 @@ fn channelName(ch: *const prefs.WirelessPrefs.ZbNodeChannel, index: u8, buf: *[2
     return std.fmt.bufPrint(buf, "Channel {d}", .{index + 1}) catch "Channel";
 }
 
-fn paintLargeSwitch(logical: *fb.LogicalFb, r: geom.Rect, on: bool) void {
-    widgets.fillRoundRect(logical, r, @divTrunc(r.h, 2), if (on) color.Rgb565.fromHex(0x079DFF) else color.Rgb565.fromHex(0x173B60));
-    widgets.strokeRoundRect(logical, r, @divTrunc(r.h, 2), panel_cyan, 1);
+fn paintLargeSwitch(logical: *fb.LogicalFb, r: geom.Rect, on: bool, theme: tokens.Theme) void {
+    widgets.fillRoundRect(logical, r, @divTrunc(r.h, 2), if (on) theme.primary else theme.surface_container_high);
+    widgets.strokeRoundRect(logical, r, @divTrunc(r.h, 2), if (on) theme.primary else theme.outline_variant, 1);
     const d = r.h - 10;
     const x = if (on) r.x + r.w - d - 5 else r.x + 5;
-    widgets.fillRoundRect(logical, .{ .x = x, .y = r.y + 5, .w = d, .h = d }, @divTrunc(d, 2), panel_text);
+    widgets.fillRoundRect(logical, .{ .x = x, .y = r.y + 5, .w = d, .h = d }, @divTrunc(d, 2), if (on) theme.on_primary else theme.on_surface);
 }
 
 pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]prefs.WirelessPrefs.ZbNodeChannel, count: u8, page: u8, quick_slot: u8, enter_t: f32) Layout {
     _ = enter_t;
-    logical.fillRect(.{ .x = 0, .y = 0, .w = tokens.Logical.width, .h = tokens.Logical.height }, panel_bg);
+    logical.fillRect(.{ .x = 0, .y = 0, .w = tokens.Logical.width, .h = tokens.Logical.height }, theme.surface_dim);
     const shell: geom.Rect = .{ .x = 20, .y = 20, .w = tokens.Logical.width - 40, .h = tokens.Logical.height - 40 };
-    widgets.fillRoundRect(logical, shell, tokens.Shape.dialog, panel_bg);
-    widgets.strokeRoundRect(logical, shell, tokens.Shape.dialog, panel_cyan, 1);
+    widgets.fillRoundRect(logical, shell, tokens.Shape.dialog, theme.surface_dim);
+    widgets.strokeRoundRect(logical, shell, tokens.Shape.dialog, theme.primary, 1);
     var lay: Layout = .{};
     lay.header = chrome.headerChrome(shell);
     chrome.paintBackToPanel(logical, theme, lay.header.back);
@@ -57,7 +51,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
     if (quick_slot < 3) {
         var prompt_buf: [96]u8 = undefined;
         const prompt = std.fmt.bufPrint(&prompt_buf, "Tap a channel to place it in quick control {d}.", .{quick_slot + 1}) catch "Tap a channel to add it.";
-        font.drawTextRole(logical, shell.x + 28, shell.y + 73, prompt, panel_muted, .body_m);
+        font.drawTextRole(logical, shell.x + 28, shell.y + 73, prompt, theme.on_surface_variant, .body_m);
     }
     const gap: i32 = 18;
     const x0 = shell.x + 28;
@@ -72,17 +66,17 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
         const row: i32 = @intCast(slot / 2);
         const r: geom.Rect = .{ .x = x0 + col * (cw + gap), .y = y0 + row * (chh + gap), .w = cw, .h = chh };
         lay.cards[slot] = r;
-        widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card);
-        widgets.strokeRoundRect(logical, r, tokens.Shape.lg, panel_cyan, 2);
+        widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container_high);
+        widgets.strokeRoundRect(logical, r, tokens.Shape.lg, theme.primary, 2);
         const idx: u8 = first + @as(u8, @intCast(slot));
         if (idx >= @min(count, 12)) {
-            font.drawTextRole(logical, r.x + 28, r.y + 92, "Not configured", panel_muted, .title_m);
+            font.drawTextRole(logical, r.x + 28, r.y + 92, "Not configured", theme.on_surface_variant, .title_m);
             continue;
         }
         const c = channels[idx];
         icons.draw(logical, r.x + 30, r.y + 30, iconFor(c), if (c.temp_alarm_active) theme.err else theme.primary);
         var name_buf: [24]u8 = undefined;
-        font.drawTextRole(logical, r.x + 92, r.y + 28, channelName(&c, idx, &name_buf), panel_text, .title_l);
+        font.drawTextRole(logical, r.x + 92, r.y + 28, channelName(&c, idx, &name_buf), theme.on_surface, .title_l);
         var value_buf: [32]u8 = undefined;
         const value: []const u8 = if (c.typ == 4) switch (c.temperature_state) {
             0 => "Waiting for reading",
@@ -92,13 +86,13 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
             4 => "Apply pending",
             else => "Unavailable",
         } else if (c.typ == 3 and c.digital_state == 1) (if (c.digital_value) "HIGH" else "LOW") else if (c.typ == 1 or c.typ == 2) (if (c.digital_value) "ON" else "OFF") else "Unavailable";
-        const value_color = if (c.temp_alarm_active or (c.typ == 4 and (c.temperature_state == 2 or c.temperature_state == 3))) theme.err else panel_cyan;
+        const value_color = if (c.temp_alarm_active or (c.typ == 4 and (c.temperature_state == 2 or c.temperature_state == 3))) theme.err else theme.primary;
         font.drawTextRole(logical, r.x + 92, r.y + 82, value, value_color, .title_m);
         lay.configure[slot] = .{ .x = r.x + 28, .y = r.y + 148, .w = 190, .h = 62 };
         widgets.drawFilledButton(logical, lay.configure[slot], "Configure", theme);
         if (c.typ == 1 or c.typ == 2) {
             lay.toggles[slot] = .{ .x = r.x + r.w - 190, .y = r.y + 138, .w = 150, .h = 72 };
-            paintLargeSwitch(logical, lay.toggles[slot], c.digital_value);
+            paintLargeSwitch(logical, lay.toggles[slot], c.digital_value, theme);
         }
     }
     lay.prev = .{ .x = shell.x + 28, .y = shell.y + shell.h - 66, .w = 180, .h = 52 };
@@ -108,7 +102,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, channels: *const [12]p
     var pbuf: [20]u8 = undefined;
     const ptxt = std.fmt.bufPrint(&pbuf, "Page {d} of {d}", .{ current_page + 1, page_count }) catch "Page";
     const tw = font.textWidthStr(ptxt, .body_m);
-    font.drawTextRole(logical, shell.x + @divTrunc(shell.w - tw, 2), lay.prev.y + 14, ptxt, panel_muted, .body_m);
+    font.drawTextRole(logical, shell.x + @divTrunc(shell.w - tw, 2), lay.prev.y + 14, ptxt, theme.on_surface_variant, .body_m);
     return lay;
 }
 

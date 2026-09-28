@@ -19,7 +19,7 @@ pub const Layout = struct {
 
 fn cardGeom(enter_t: f32) geom.Rect {
     _ = enter_t;
-    return .{ .x = 20, .y = 20, .w = tokens.Logical.width - 40, .h = tokens.Logical.height - 40 };
+    return .{ .x = 0, .y = 0, .w = tokens.Logical.width, .h = tokens.Logical.height };
 }
 
 fn chipBadge(logical: *fb.LogicalFb, theme: tokens.Theme, cx: i32, cy: i32, label: []const u8) void {
@@ -77,7 +77,7 @@ fn nodeCard(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect, button: g
 pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, c6_online: bool, s3_online: bool, nano_online: bool, node_online: bool, c6_version: []const u8, s3_version: []const u8, nano_version: []const u8, usb_ready: bool, enter_t: f32) Layout {
     widgets.fillScrim(logical, theme);
     const card = cardGeom(enter_t);
-    widgets.fillRoundRect(logical, card, tokens.Shape.dialog, theme.elev(3));
+    logical.fillRect(card, theme.elev(3));
     var lay: Layout = .{};
     const header: geom.Rect = .{ .x = 8, .y = 8, .w = 1264, .h = 60 };
     widgets.fillRoundRect(logical, header, tokens.Shape.md, theme.elev(3));
@@ -91,7 +91,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, c6_online: bool, s3_on
     font.drawTextRole(logical, 958, 15, if (usb_ready) "USB connected" else "USB not connected", theme.on_surface, .title_l);
     font.drawTextRole(logical, 958, 40, if (usb_ready) "FAT32 drive detected" else "Insert FAT32 drive", theme.on_surface_variant, .body_m);
     tool_chrome.paintExit(logical, theme, lay.header.exit);
-    font.drawTextRole(logical, 14, 72, "Select a device", theme.on_surface, .headline_l);
+    font.drawTextRole(logical, 24, 72, "Select a device", theme.on_surface, .headline_l);
     const gap: i32 = 10;
     const x: i32 = 8;
     const y: i32 = 108;
