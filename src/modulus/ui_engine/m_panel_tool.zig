@@ -22,11 +22,15 @@ pub fn backWidth() i32 {
 
 /// Tonal back control — returns to M-Panel grid (not dashboard).
 pub fn paintBackToPanel(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect) void {
+    paintBackTo(logical, theme, r, back_label);
+}
+
+pub fn paintBackTo(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect, destination: []const u8) void {
     widgets.fillRoundRect(logical, r, tokens.Shape.full, theme.surface_container);
     const hh = font.faceHeight(font.faceForRole(.label_l));
     const y = r.y + @divTrunc(r.h - hh, 2);
     font.drawTextRole(logical, r.x + tokens.Space.sm, y, "<", theme.on_surface, .label_l);
-    font.drawTextRole(logical, r.x + tokens.Space.sm + 14, y, back_label, theme.on_surface, .label_l);
+    font.drawTextRole(logical, r.x + tokens.Space.sm + 14, y, destination, theme.on_surface, .label_l);
 }
 
 pub fn paintExit(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect) void {

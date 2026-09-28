@@ -39,6 +39,7 @@ const m_panel_zigbee = @import("m_panel_zigbee.zig");
 const m_panel_zigbee_add = @import("m_panel_zigbee_add.zig");
 const m_panel_controls = @import("m_panel_controls.zig");
 const m_panel_update_hub = @import("m_panel_update_hub.zig");
+const m_panel_node_update = @import("m_panel_node_update.zig");
 const m_panel_c6_ota = @import("m_panel_c6_ota.zig");
 const m_panel_nano_ota = @import("m_panel_nano_ota.zig");
 const m_panel_s3_ota = @import("m_panel_s3_ota.zig");
@@ -435,6 +436,7 @@ pub const Engine = struct {
     m_panel_zb_menu_rect: geom.Rect = .{},
     m_panel_zb_menu_scroll: usize = 0,
     m_panel_update_hub_layout: m_panel_update_hub.Layout = .{},
+    m_panel_node_update_layout: m_panel_node_update.Layout = .{},
     m_panel_c6_ota_layout: m_panel_c6_ota.Layout = .{},
     m_panel_c6_ota_state: m_panel_c6_ota.State = .{},
     m_panel_s3_ota_layout: m_panel_s3_ota.Layout = .{},
@@ -442,6 +444,10 @@ pub const Engine = struct {
     m_panel_nano_ota_layout: m_panel_nano_ota.Layout = .{},
     m_panel_nano_ota_state: m_panel_nano_ota.State = .{},
     m_panel_tool: u8 = 0xff,
+    /// Parent tool for a device detail opened from Device Management.
+    m_panel_tool_parent: ?m_panel.ToolId = null,
+    /// One-shot continuation while Device Management waits for GET_DEVICES.
+    m_panel_node_config_pending: bool = false,
     needs_full_repaint: bool = true,
     /// After full paint on settings: present window AABB only (margins unchanged).
     settings_present_window: bool = false,
@@ -758,6 +764,7 @@ pub const Engine = struct {
                         self.theme,
                         .{
                             .wireless = &self.prefs.wireless,
+                            .back_destination = if (self.m_panel_tool_parent == .devices) "Devices" else "M-Panel",
                             .scroll_px = self.m_panel_zb_scroll,
                             .anim_t = @as(f32, @floatFromInt(self.frame_n % 120)) / 120.0,
                             .menu_dev = self.m_panel_zb_menu_dev,
@@ -786,7 +793,7 @@ pub const Engine = struct {
                 }
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.controls)) {
                 self.m_panel_controls_layout = m_panel_controls.paint(&self.logical, self.theme, &self.prefs.wireless.zb_node_channels, self.prefs.wireless.zb_node_channel_count, self.m_panel_controls_page, self.m_panel_quick_slot, self.m_panel_fx.value);
-            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.firmware_update)) {
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.devices)) {
                 self.m_panel_update_hub_layout = m_panel_update_hub.paint(
                     &self.logical,
                     self.theme,
@@ -821,6 +828,8 @@ pub const Engine = struct {
                     &self.m_panel_nano_ota_state,
                     self.m_panel_fx.value,
                 );
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.node_update)) {
+                self.m_panel_node_update_layout = m_panel_node_update.paint(&self.logical, self.theme);
             } else {
                 self.m_panel_tool_layout = m_panel.paintTool(
                     &self.logical,
@@ -5586,6 +5595,7 @@ pub const Engine = struct {
 
     fn closeToolToDashboard(self: *Engine) void {
         self.m_panel_tool = 0xff;
+        self.m_panel_tool_parent = null;
         self.m_panel_open = false;
         self.m_panel_term_scroll = 0;
         self.m_panel_usb_scroll = 0;
@@ -5862,6 +5872,10 @@ pub const Engine = struct {
         switch (h.kind) {
             .none => {},
             .back => {
+                if (self.m_panel_tool_parent != null) {
+                    self.returnToMPanelFromTool();
+                    return;
+                }
                 if (self.prefs.wireless.zb_node_open) {
                     self.prefs.wireless.zb_node_open = false;
                     self.requestFull();
@@ -6011,15 +6025,7 @@ pub const Engine = struct {
                 }
                 self.requestFull();
             },
-            .configure => {
-                self.prefs.wireless.zb_node_open = true;
-                self.prefs.wireless.zb_node_ready = false;
-                self.prefs.wireless.zb_node_idx = h.dev;
-                self.prefs.wireless.zb_node_page = 0;
-                self.m_panel_zb_scroll = 0;
-                _ = self.emitWireless(.{ .zb_node_open = h.dev });
-                self.requestFull();
-            },
+            .configure => self.openZigbeeNodeConfig(h.dev),
             .rename => {
                 self.zb_rename_idx = h.dev;
                 self.openTextPad(.wl_zb_name, "Device name", self.prefs.wireless.zbDevLabel(h.dev));
@@ -6140,7 +6146,7 @@ pub const Engine = struct {
             },
             .node_close => {
                 self.prefs.wireless.zb_node_open = false;
-                self.requestFull();
+                if (self.m_panel_tool_parent != null) self.returnToMPanelFromTool() else self.requestFull();
             },
             .node_prev => {
                 self.prefs.wireless.zb_node_page -|= 1;
@@ -6167,6 +6173,7 @@ pub const Engine = struct {
 
     fn openMPanel(self: *Engine) void {
         self.m_panel_tool = 0xff;
+        self.m_panel_tool_parent = null;
         self.m_panel_open = true;
         self.m_panel_scroll = 0;
         snapEnter(&self.m_panel_fx);
@@ -6190,6 +6197,7 @@ pub const Engine = struct {
         self.m_panel_open = false;
         self.m_panel_scroll = 0;
         self.m_panel_tool = index;
+        self.m_panel_tool_parent = null;
         self.m_panel_term_scroll = 0;
         self.m_panel_usb_scroll = 0;
         self.m_panel_sd_scroll = 0;
@@ -6216,22 +6224,9 @@ pub const Engine = struct {
                 }
             }
         }
-        if (index == @intFromEnum(m_panel.ToolId.firmware_update)) {
+        if (index == @intFromEnum(m_panel.ToolId.devices)) {
             if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
             if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
-            if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
-        }
-        if (index == @intFromEnum(m_panel.ToolId.c6_update)) {
-            self.m_panel_c6_ota_state.view = .dashboard;
-            if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
-        }
-        if (index == @intFromEnum(m_panel.ToolId.s3_update)) {
-            self.m_panel_s3_ota_state.view = .dashboard;
-            if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
-            if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
-        }
-        if (index == @intFromEnum(m_panel.ToolId.nano_update)) {
-            self.m_panel_nano_ota_state.view = .dashboard;
             if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
         }
         if (index == @intFromEnum(m_panel.ToolId.terminal) and self.m_panel_term_auto_scroll) {
@@ -6242,6 +6237,15 @@ pub const Engine = struct {
     }
 
     fn returnToMPanelFromTool(self: *Engine) void {
+        if (self.m_panel_tool_parent) |parent| {
+            self.m_panel_tool_parent = null;
+            self.prefs.wireless.zb_node_open = false;
+            self.m_panel_tool = @intFromEnum(parent);
+            self.closeZbMenu();
+            snapEnter(&self.m_panel_fx);
+            self.requestFull();
+            return;
+        }
         self.m_panel_tool = 0xff;
         self.m_panel_term_scroll = 0;
         self.m_panel_usb_scroll = 0;
@@ -6254,17 +6258,13 @@ pub const Engine = struct {
         self.requestFull();
     }
 
-    fn openFirmwareTarget(self: *Engine, target: m_panel_update_hub.Target) void {
-        if (target == .node) {
-            self.showSnackbar("Zigbee Node update requires USB");
-            self.requestFull();
-            return;
-        }
+    fn openDeviceUpdate(self: *Engine, target: m_panel_update_hub.Target) void {
+        self.m_panel_tool_parent = .devices;
         self.m_panel_tool = switch (target) {
             .c6 => @intFromEnum(m_panel.ToolId.c6_update),
             .s3 => @intFromEnum(m_panel.ToolId.s3_update),
             .nano => @intFromEnum(m_panel.ToolId.nano_update),
-            .node => unreachable,
+            .node => @intFromEnum(m_panel.ToolId.node_update),
         };
         switch (target) {
             .c6 => {
@@ -6272,18 +6272,80 @@ pub const Engine = struct {
                 if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
             },
             .s3 => {
-                // The S3 landing page contains both Firmware Update and the
-                // remote UART pin/baud configuration. Jumping straight to
-                // .firmware made UART Settings impossible to reach.
-                self.m_panel_s3_ota_state.view = .dashboard;
+                self.m_panel_s3_ota_state.view = .firmware;
                 if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
-                if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
             },
             .nano => {
                 self.m_panel_nano_ota_state.view = .firmware;
                 if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
             },
-            .node => unreachable,
+            .node => {},
+        }
+        snapEnter(&self.m_panel_fx);
+        self.requestFull();
+    }
+
+    fn openZigbeeNodeConfig(self: *Engine, dev: u8) void {
+        self.m_panel_node_config_pending = false;
+        self.prefs.wireless.zb_node_open = true;
+        self.prefs.wireless.zb_node_ready = false;
+        self.prefs.wireless.zb_node_idx = dev;
+        self.prefs.wireless.zb_node_page = 0;
+        self.m_panel_zb_scroll = 0;
+        _ = self.emitWireless(.{ .zb_node_open = dev });
+        self.requestFull();
+    }
+
+    fn modulusNodeDeviceIndex(self: *const Engine) ?u8 {
+        const w = &self.prefs.wireless;
+        for (w.live_zb_snap[0..w.live_zb_n], 0..) |snap, i| {
+            if (snap.device_id == 0xFFF0) return @intCast(i);
+        }
+        return null;
+    }
+
+    /// Complete the one pending Device Management Configure action after the
+    /// requested device table has arrived. Never sends another list request.
+    pub fn zigbeeDeviceListReady(self: *Engine) void {
+        if (!self.m_panel_node_config_pending) return;
+        self.m_panel_node_config_pending = false;
+        if (self.modulusNodeDeviceIndex()) |idx| {
+            self.openZigbeeNodeConfig(idx);
+        } else {
+            self.prefs.wireless.zb_node_open = false;
+            self.showSnackbarError("Modulus Node not found");
+            self.requestFull();
+        }
+    }
+
+    fn openS3UartSettings(self: *Engine) void {
+        self.m_panel_s3_ota_state.view = .settings;
+        self.m_panel_s3_ota_state.config_loaded = false;
+        if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
+    }
+
+    fn openDeviceConfiguration(self: *Engine, target: m_panel_update_hub.Target) void {
+        switch (target) {
+            .s3 => {
+                self.m_panel_tool_parent = .devices;
+                self.m_panel_tool = @intFromEnum(m_panel.ToolId.s3_update);
+                self.openS3UartSettings();
+            },
+            .node => {
+                self.m_panel_tool_parent = .devices;
+                self.m_panel_tool = @intFromEnum(m_panel.ToolId.zigbee);
+                const w = &self.prefs.wireless;
+                if (self.modulusNodeDeviceIndex()) |idx| {
+                    self.openZigbeeNodeConfig(idx);
+                } else {
+                    w.zb_node_open = false;
+                    self.m_panel_zb_scroll = 0;
+                    if (!self.m_panel_node_config_pending and w.zigbee and self.emitWireless(.zb_refresh)) {
+                        self.m_panel_node_config_pending = true;
+                    }
+                }
+            },
+            .c6, .nano => return,
         }
         snapEnter(&self.m_panel_fx);
         self.requestFull();
@@ -6351,12 +6413,6 @@ pub const Engine = struct {
         }
     }
 
-    fn returnToFirmwareHub(self: *Engine) void {
-        self.m_panel_tool = @intFromEnum(m_panel.ToolId.firmware_update);
-        snapEnter(&self.m_panel_fx);
-        self.requestFull();
-    }
-
     fn handleMPanelClick(self: *Engine, x: i32, y: i32) void {
         if (self.m_panel_tool != 0xff) {
             if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.terminal)) {
@@ -6409,13 +6465,14 @@ pub const Engine = struct {
                         }
                     },
                 }
-            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.firmware_update)) {
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.devices)) {
                 const h = m_panel_update_hub.hit(self.m_panel_update_hub_layout, x, y);
                 switch (h.kind) {
                     .none => {},
                     .back => self.returnToMPanelFromTool(),
                     .exit => self.closeToolToDashboard(),
-                    .target => self.openFirmwareTarget(h.target),
+                    .target => self.openDeviceUpdate(h.target),
+                    .configure => self.openDeviceConfiguration(h.target),
                     .refresh => {
                         if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
@@ -6432,10 +6489,8 @@ pub const Engine = struct {
                 const h = m_panel_c6_ota.hit(self.m_panel_c6_ota_layout, x, y);
                 switch (h.kind) {
                     .none => {},
-                    .scrim, .back => self.returnToFirmwareHub(),
+                    .scrim, .back, .detail_back => self.returnToMPanelFromTool(),
                     .exit => self.closeToolToDashboard(),
-                    .detail_back => self.m_panel_c6_ota_state.view = .dashboard,
-                    .firmware => self.m_panel_c6_ota_state.view = .firmware,
                     .refresh => if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0),
                     .row => if (self.c6_ota_cmd_sink) |sink| sink(self, .select, h.index),
                     .check => if (self.m_panel_c6_ota_state.file_count > 0 and self.m_panel_c6_ota_state.phase != .flashing) {
@@ -6450,6 +6505,7 @@ pub const Engine = struct {
                 const h = m_panel_s3_ota.hit(self.m_panel_s3_ota_layout, x, y);
                 if (self.m_panel_s3_ota_state.view == .review) {
                     switch (h.kind) {
+                        .scrim, .back, .detail_back => self.returnToMPanelFromTool(),
                         .cancel => self.m_panel_s3_ota_state.view = .settings,
                         .apply => if (!self.m_panel_s3_ota_state.config_busy) {
                             self.m_panel_s3_ota_state.view = .settings;
@@ -6463,9 +6519,8 @@ pub const Engine = struct {
                 }
                 switch (h.kind) {
                     .none => {},
-                    .scrim, .back => self.returnToFirmwareHub(),
+                    .scrim, .back, .detail_back => self.returnToMPanelFromTool(),
                     .exit => self.closeToolToDashboard(),
-                    .detail_back => self.m_panel_s3_ota_state.view = .dashboard,
                     .refresh => if (self.s3_ota_cmd_sink) |sink| {
                         if (self.m_panel_s3_ota_state.view == .settings) sink(self, .config_refresh, 0) else sink(self, .refresh, 0);
                     },
@@ -6478,12 +6533,6 @@ pub const Engine = struct {
                     },
                     .restart => if (self.m_panel_s3_ota_state.phase == .success) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .restart, 0);
-                    },
-                    .firmware => self.m_panel_s3_ota_state.view = .firmware,
-                    .settings => {
-                        self.m_panel_s3_ota_state.view = .settings;
-                        self.m_panel_s3_ota_state.config_loaded = false;
-                        if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
                     },
                     .tx_minus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_tx > 0) {
                         self.m_panel_s3_ota_state.draft_tx -= 1;
@@ -6522,10 +6571,8 @@ pub const Engine = struct {
                 const h = m_panel_nano_ota.hit(self.m_panel_nano_ota_layout, x, y);
                 switch (h.kind) {
                     .none => {},
-                    .scrim, .back => self.returnToFirmwareHub(),
+                    .scrim, .back, .detail_back => self.returnToMPanelFromTool(),
                     .exit => self.closeToolToDashboard(),
-                    .detail_back => self.m_panel_nano_ota_state.view = .dashboard,
-                    .firmware => self.m_panel_nano_ota_state.view = .firmware,
                     .refresh => if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0),
                     .row => if (self.nano_ota_cmd_sink) |sink| sink(self, .select, h.index),
                     .check => if (self.m_panel_nano_ota_state.file_count > 0) {
@@ -6536,6 +6583,12 @@ pub const Engine = struct {
                     },
                 }
                 self.requestFull();
+            } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.node_update)) {
+                switch (m_panel_node_update.hit(self.m_panel_node_update_layout, x, y)) {
+                    .none => {},
+                    .back => self.returnToMPanelFromTool(),
+                    .exit => self.closeToolToDashboard(),
+                }
             } else if (m_panel.hitTool(self.m_panel_tool_layout, x, y)) {
                 self.returnToMPanelFromTool();
             }
@@ -9355,12 +9408,272 @@ test "temperature alarm stays active after acknowledgement and clears in safe ba
     try std.testing.expectEqual(@as(u16, 0), eng.zb_temp_alarm_ack_mask & (@as(u16, 1) << 3));
 }
 
-test "S3 target opens landing page so UART settings remain reachable" {
+test "S3 device actions open existing update and UART settings views" {
     const gpa = std.testing.allocator;
     var eng = try Engine.create(gpa);
     defer eng.destroy(gpa);
     eng.skipBoot();
-    eng.openFirmwareTarget(.s3);
+    eng.openDeviceUpdate(.s3);
     try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.s3_update), eng.m_panel_tool);
-    try std.testing.expectEqual(m_panel_s3_ota.View.dashboard, eng.m_panel_s3_ota_state.view);
+    try std.testing.expectEqual(m_panel_s3_ota.View.firmware, eng.m_panel_s3_ota_state.view);
+    eng.openDeviceConfiguration(.s3);
+    try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.s3_update), eng.m_panel_tool);
+    try std.testing.expectEqual(m_panel_s3_ota.View.settings, eng.m_panel_s3_ota_state.view);
+}
+
+var test_node_refresh_count: u8 = 0;
+var test_node_open_count: u8 = 0;
+
+fn testNodeConfigureWirelessSink(_: *Engine, cmd: WirelessUiCmd) void {
+    switch (cmd) {
+        .zb_refresh => test_node_refresh_count += 1,
+        .zb_node_open => test_node_open_count += 1,
+        else => {},
+    }
+}
+
+test "all Device Management actions return directly to Devices and then M-Panel" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    eng.prefs.wireless.live_zb_n = 1;
+    eng.prefs.wireless.live_zb_snap[0].device_id = 0xFFF0;
+    eng.prefs.wireless.live_zb_snap[0].short_addr = 0x1234;
+    eng.prefs.wireless.zb_node_short = 0; // cold boot must still resolve the Node
+
+    const routes = [_]struct { target: m_panel_update_hub.Target, configure: bool }{
+        .{ .target = .c6, .configure = false },
+        .{ .target = .s3, .configure = true },
+        .{ .target = .s3, .configure = false },
+        .{ .target = .node, .configure = true },
+        .{ .target = .node, .configure = false },
+        .{ .target = .nano, .configure = false },
+    };
+    for (routes) |route| {
+        for ([_]bool{ false, true }) |header_back| {
+            eng.openMPanel();
+            eng.m_panel_layout = m_panel.paint(&eng.logical, eng.theme, 0, 1, false, &eng.prefs.wireless.zb_node_channels, eng.prefs.wireless.zb_node_channel_count, false, 0);
+            var devices_tile: ?geom.Rect = null;
+            for (eng.m_panel_layout.tiles[0..eng.m_panel_layout.tile_n], 0..) |tile, i| {
+                if (eng.m_panel_layout.tool_indices[i] == @intFromEnum(m_panel.ToolId.devices)) devices_tile = tile;
+            }
+            const tile = devices_tile orelse return error.TestUnexpectedResult;
+            eng.handleMPanelClick(tile.x + 5, tile.y + 5);
+            try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
+
+            eng.m_panel_update_hub_layout = m_panel_update_hub.paint(&eng.logical, eng.theme, false, false, false, false, "", "", "", false, 1);
+            const index: usize = @intFromEnum(route.target);
+            const action = if (route.configure) eng.m_panel_update_hub_layout.configure[index] else eng.m_panel_update_hub_layout.targets[index];
+            eng.handleMPanelClick(action.x + 5, action.y + 5);
+            try std.testing.expect(eng.m_panel_tool != @intFromEnum(m_panel.ToolId.devices));
+            try std.testing.expectEqual(m_panel.ToolId.devices, eng.m_panel_tool_parent.?);
+
+            const back = switch (route.target) {
+                .c6 => blk: {
+                    const lay = m_panel_c6_ota.paint(&eng.logical, eng.theme, &eng.m_panel_c6_ota_state, 1);
+                    eng.m_panel_c6_ota_layout = lay;
+                    break :blk if (header_back) lay.header.back else lay.detail_back;
+                },
+                .s3 => blk: {
+                    const lay = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+                    eng.m_panel_s3_ota_layout = lay;
+                    break :blk if (header_back) lay.header.back else lay.detail_back;
+                },
+                .nano => blk: {
+                    const lay = m_panel_nano_ota.paint(&eng.logical, eng.theme, &eng.m_panel_nano_ota_state, 1);
+                    eng.m_panel_nano_ota_layout = lay;
+                    break :blk if (header_back) lay.header.back else lay.detail_back;
+                },
+                .node => if (route.configure) blk: {
+                    try std.testing.expect(eng.prefs.wireless.zb_node_open);
+                    const lay = m_panel_zigbee.paint(&eng.logical, eng.theme, .{ .wireless = &eng.prefs.wireless }, 1);
+                    eng.m_panel_zb_layout = lay;
+                    break :blk lay.header.back;
+                } else blk: {
+                    const lay = m_panel_node_update.paint(&eng.logical, eng.theme);
+                    eng.m_panel_node_update_layout = lay;
+                    break :blk lay.header.back;
+                },
+            };
+            eng.handleMPanelClick(back.x + 5, back.y + 5);
+            try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
+            try std.testing.expect(eng.m_panel_tool_parent == null);
+            try std.testing.expect(!eng.prefs.wireless.zb_node_open);
+
+            const hub_back = eng.m_panel_update_hub_layout.header.back;
+            eng.handleMPanelClick(hub_back.x + 5, hub_back.y + 5);
+            try std.testing.expectEqual(@as(u8, 0xff), eng.m_panel_tool);
+            try std.testing.expect(eng.m_panel_open);
+        }
+    }
+}
+
+test "device review and gesture Back preserve the parent route" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    eng.openMPanelTool(@intFromEnum(m_panel.ToolId.devices));
+    eng.openDeviceConfiguration(.s3);
+    eng.m_panel_s3_ota_state.config_supported = true;
+    eng.m_panel_s3_ota_layout = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+    const review = eng.m_panel_s3_ota_layout.review;
+    eng.handleMPanelClick(review.x + 5, review.y + 5);
+    try std.testing.expectEqual(m_panel_s3_ota.View.review, eng.m_panel_s3_ota_state.view);
+    eng.m_panel_s3_ota_layout = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+    const back = eng.m_panel_s3_ota_layout.header.back;
+    eng.handleMPanelClick(back.x + 5, back.y + 5);
+    try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
+
+    eng.openDeviceUpdate(.c6);
+    try std.testing.expect(eng.gestureBack());
+    try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
+
+}
+
+test "Node Configure resolves an available Modulus Node with cold-boot short state" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    test_node_refresh_count = 0;
+    test_node_open_count = 0;
+    eng.wireless_cmd_sink = testNodeConfigureWirelessSink;
+    eng.prefs.wireless.zigbee = true;
+    eng.prefs.wireless.zb_node_short = 0;
+    eng.prefs.wireless.live_zb_n = 2;
+    eng.prefs.wireless.live_zb_snap[0].device_id = 0x0100;
+    eng.prefs.wireless.live_zb_snap[1].device_id = 0xFFF0;
+
+    eng.openDeviceConfiguration(.node);
+
+    try std.testing.expect(eng.prefs.wireless.zb_node_open);
+    try std.testing.expectEqual(@as(u8, 1), eng.prefs.wireless.zb_node_idx);
+    try std.testing.expect(!eng.m_panel_node_config_pending);
+    try std.testing.expectEqual(@as(u8, 0), test_node_refresh_count);
+    try std.testing.expectEqual(@as(u8, 1), test_node_open_count);
+}
+
+test "Node Configure requests one list and does not repeat while pending" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    test_node_refresh_count = 0;
+    test_node_open_count = 0;
+    eng.wireless_cmd_sink = testNodeConfigureWirelessSink;
+    eng.prefs.wireless.zigbee = true;
+    eng.prefs.wireless.zb_node_short = 0;
+
+    eng.openDeviceConfiguration(.node);
+    eng.openDeviceConfiguration(.node);
+
+    try std.testing.expect(eng.m_panel_node_config_pending);
+    try std.testing.expect(!eng.prefs.wireless.zb_node_open);
+    try std.testing.expectEqual(@as(u8, 1), test_node_refresh_count);
+    try std.testing.expectEqual(@as(u8, 0), test_node_open_count);
+}
+
+test "pending Node Configure continues automatically when the list arrives" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    test_node_refresh_count = 0;
+    test_node_open_count = 0;
+    eng.wireless_cmd_sink = testNodeConfigureWirelessSink;
+    eng.prefs.wireless.zigbee = true;
+    eng.openDeviceConfiguration(.node);
+    eng.prefs.wireless.live_zb_n = 1;
+    eng.prefs.wireless.live_zb_snap[0].device_id = 0xFFF0;
+    eng.prefs.wireless.live_zb_snap[0].short_addr = 0x4321;
+
+    eng.zigbeeDeviceListReady();
+
+    try std.testing.expect(!eng.m_panel_node_config_pending);
+    try std.testing.expect(eng.prefs.wireless.zb_node_open);
+    try std.testing.expectEqual(@as(u8, 0), eng.prefs.wireless.zb_node_idx);
+    try std.testing.expectEqual(@as(u8, 1), test_node_refresh_count);
+    try std.testing.expectEqual(@as(u8, 1), test_node_open_count);
+}
+
+test "pending Node Configure stops when the refreshed list has no Node" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    test_node_refresh_count = 0;
+    test_node_open_count = 0;
+    eng.wireless_cmd_sink = testNodeConfigureWirelessSink;
+    eng.prefs.wireless.zigbee = true;
+    eng.openDeviceConfiguration(.node);
+    eng.prefs.wireless.live_zb_n = 1;
+    eng.prefs.wireless.live_zb_snap[0].device_id = 0x0100;
+
+    eng.zigbeeDeviceListReady();
+    eng.zigbeeDeviceListReady();
+
+    try std.testing.expect(!eng.m_panel_node_config_pending);
+    try std.testing.expect(!eng.prefs.wireless.zb_node_open);
+    try std.testing.expectEqual(@as(u8, 1), test_node_refresh_count);
+    try std.testing.expectEqual(@as(u8, 0), test_node_open_count);
+}
+
+test "repeated device routes keep Device Management as parent" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    eng.openMPanelTool(@intFromEnum(m_panel.ToolId.devices));
+    eng.openDeviceUpdate(.c6);
+    eng.returnToMPanelFromTool();
+    try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
+    eng.openDeviceConfiguration(.s3);
+    eng.returnToMPanelFromTool();
+    try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
+    eng.openDeviceUpdate(.node);
+    eng.returnToMPanelFromTool();
+    try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
+    eng.returnToMPanelFromTool();
+    try std.testing.expect(eng.m_panel_open);
+    try std.testing.expectEqual(@as(u8, 0xff), eng.m_panel_tool);
+}
+
+test "M-Panel and Device Management use every selectable light and dark theme" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    var channels: [12]settings_prefs.WirelessPrefs.ZbNodeChannel = [_]settings_prefs.WirelessPrefs.ZbNodeChannel{.{}} ** 12;
+    channels[0] = .{ .typ = 2, .favorite = 1, .digital_value = true };
+    channels[1] = .{ .typ = 2, .favorite = 2, .digital_value = false };
+    for ([_]bool{ false, true }) |dark| {
+        for (0..settings_prefs.DisplayPrefs.accent_names.len) |accent| {
+            for (0..3) |contrast| {
+                const display: settings_prefs.DisplayPrefs = .{ .darkmode = dark, .accent = @intCast(accent), .ui_contrast = @intCast(contrast) };
+                const theme = display.buildTheme();
+                const panel = m_panel.paint(&logical, theme, 0, 1, true, &channels, 0, true, 1);
+                try std.testing.expectEqual(theme.surface_dim.toU16(), logical.get(0, 0).toU16());
+                try std.testing.expectEqual(theme.elev(3).toU16(), logical.get(panel.card.x + 12, panel.card.y + 12).toU16());
+                try std.testing.expectEqual(theme.surface_container_high.toU16(), logical.get(panel.quick[3].x + 15, panel.quick[3].y + 30).toU16());
+                try std.testing.expectEqual(theme.primary.toU16(), logical.get(panel.quick[0].x + @divTrunc(panel.quick[0].w - 88, 2) + 15, panel.quick[0].y + 39).toU16());
+
+                const active = m_panel.paint(&logical, theme, 0, 1, false, &channels, 2, false, 0);
+                const on = active.quick[0];
+                const off = active.quick[1];
+                try std.testing.expectEqual(theme.primary.toU16(), logical.get(on.x + 158, on.y + 186).toU16());
+                try std.testing.expectEqual(theme.on_primary.toU16(), logical.get(on.x + on.w - 52, on.y + 186).toU16());
+                try std.testing.expectEqual(theme.surface_container_high.toU16(), logical.get(off.x + off.w - 34, off.y + 186).toU16());
+                try std.testing.expectEqual(theme.on_surface.toU16(), logical.get(off.x + 176, off.y + 186).toU16());
+
+                const devices = m_panel_update_hub.paint(&logical, theme, true, true, true, true, "2.11.4", "3.1.4", "3.1.4", true, 1);
+                try std.testing.expectEqual(theme.scrim.toU16(), logical.get(0, 0).toU16());
+                try std.testing.expectEqual(theme.elev(3).toU16(), logical.get(600, 82).toU16());
+                try std.testing.expectEqual(theme.surface_container.toU16(), logical.get(devices.cards[0].x + 28, devices.cards[0].y + 28).toU16());
+                try std.testing.expectEqual(theme.secondary_container.toU16(), logical.get(devices.targets[0].x + 28, devices.targets[0].y + 28).toU16());
+                try std.testing.expect(color.contrastRatio(theme.on_surface.toHex(), theme.surface_container.toHex()) >= 4.0);
+                try std.testing.expect(color.contrastRatio(theme.on_secondary_container.toHex(), theme.secondary_container.toHex()) >= 4.0);
+            }
+        }
+    }
 }

@@ -25,6 +25,7 @@ const row_h: i32 = zb_exposes.row_h;
 
 pub const Ctx = struct {
     wireless: *const settings_prefs.WirelessPrefs,
+    back_destination: []const u8 = "M-Panel",
     scroll_px: i32 = 0,
     /// Frame phase 0..1 for indeterminate affordances (permit join bar).
     anim_t: f32 = 0,
@@ -452,7 +453,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, ctx: Ctx, enter_t: f32
 
     var lay: Layout = .{};
     lay.header = tool_chrome.headerChrome(shell);
-    tool_chrome.paintBackToPanel(logical, theme, lay.header.back);
+    tool_chrome.paintBackTo(logical, theme, lay.header.back, ctx.back_destination);
     const title_x = lay.header.back.x + lay.header.back.w + tokens.Space.sm;
     tool_chrome.paintTitle(logical, theme, title_x, lay.header.back.y, "Zigbee");
     tool_chrome.paintExit(logical, theme, lay.header.exit);

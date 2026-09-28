@@ -57,6 +57,7 @@ var g_last_bt: u8 = 255;
 var g_prev_bt_on: bool = false;
 var g_last_espnow: u8 = 255;
 var g_last_zb: u8 = 255;
+var g_last_zb_device_list_gen: u32 = 0;
 var g_last_th: u8 = 255;
 var g_last_ant_ext: u8 = 255;
 
@@ -222,6 +223,7 @@ fn syncZbDevices(w: *settings_prefs.WirelessPrefs) void {
             .rssi = d.rssi,
             .lqi = d.lqi,
             .short_addr = d.short_addr,
+            .device_id = d.device_id,
             .volt_raw = d.volt_raw,
             .curr_raw = d.curr_raw,
             .power_raw = d.power_raw,
@@ -419,6 +421,11 @@ pub fn wirelessPoll(eng: *Engine) void {
     }
     copyCStr(w.zb_network[0..], c.modulus_wireless_zigbee_network_text());
     syncZbDevices(w);
+    const list_gen = c.modulus_wireless_zb_device_list_generation();
+    if (list_gen != g_last_zb_device_list_gen) {
+        g_last_zb_device_list_gen = list_gen;
+        eng.zigbeeDeviceListReady();
+    }
     syncZbNode(eng);
     syncThDevices(w);
 

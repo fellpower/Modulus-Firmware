@@ -7,13 +7,12 @@ const fb = @import("fb.zig");
 const font = @import("font.zig");
 const widgets = @import("widgets.zig");
 const tool_chrome = @import("m_panel_tool.zig");
-const icons = @import("icons_phosphor.zig");
 
 pub const max_files = 8;
 pub const name_len = 96;
 pub const Phase = enum(u8) { idle, ready, armed, flashing, success, failed };
 pub const Action = enum(u8) { refresh, select, check, flash, restart, config_refresh, config_apply, config_test };
-pub const View = enum(u8) { dashboard, firmware, settings, review };
+pub const View = enum(u8) { firmware, settings, review };
 
 pub const State = struct {
     phase: Phase = .idle,
@@ -29,7 +28,7 @@ pub const State = struct {
     file_lens: [max_files]u8 = .{0} ** max_files,
     status: [160]u8 = .{0} ** 160,
     status_len: u8 = 0,
-    view: View = .dashboard,
+    view: View = .firmware,
     config_supported: bool = false,
     test_supported: bool = false,
     config_busy: bool = false,
@@ -56,7 +55,7 @@ pub const State = struct {
     }
 };
 
-pub const Hit = enum { none, scrim, back, exit, detail_back, firmware, settings, refresh, row, check, flash, restart, tx_minus, tx_plus, rx_minus, rx_plus, baud, test_cnc, review, cancel, apply };
+pub const Hit = enum { none, scrim, back, exit, detail_back, refresh, row, check, flash, restart, tx_minus, tx_plus, rx_minus, rx_plus, baud, test_cnc, review, cancel, apply };
 pub const HitInfo = struct { kind: Hit = .none, index: u8 = 0 };
 pub const Layout = struct {
     header: tool_chrome.Header = .{},
@@ -66,8 +65,6 @@ pub const Layout = struct {
     check: geom.Rect = .{},
     flash: geom.Rect = .{},
     restart: geom.Rect = .{},
-    firmware: geom.Rect = .{},
-    settings: geom.Rect = .{},
     detail_back: geom.Rect = .{},
     tx_minus: geom.Rect = .{},
     tx_plus: geom.Rect = .{},
@@ -143,49 +140,6 @@ fn shortVersion(text: []const u8) []const u8 {
     return text;
 }
 
-fn drawStatusCard(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, r: geom.Rect) void {
-    widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container_low);
-    const dot: geom.Rect = .{ .x = r.x + tokens.Space.lg, .y = r.y + 24, .w = 18, .h = 18 };
-    widgets.fillRoundRect(logical, dot, 9, if (state.s3_connected) theme.primary else theme.tertiary);
-    font.drawTextRole(logical, dot.x + 34, r.y + 16, "S3 Bridge", theme.on_surface, .title_m);
-    font.drawTextRole(logical, dot.x + 34, r.y + 51, if (state.s3_connected) "ESP-NOW connected" else "Waiting for ESP-NOW", theme.on_surface_variant, .body_m);
-    if (state.version_len != 0) drawFittedText(logical, r.x + r.w - 300, r.y + 18, 276, shortVersion(state.versionText()), theme.on_surface_variant, .body_m);
-    var uart: [64]u8 = undefined;
-    const uart_text = if (state.config_loaded)
-        (std.fmt.bufPrint(&uart, "TX {d}  |  RX {d}  |  {d} baud", .{ state.uart_tx, state.uart_rx, state.uart_baud }) catch "UART configuration unavailable")
-    else
-        "UART configuration loading...";
-    drawFittedText(logical, r.x + 520, r.y + 55, r.w - 520 - tokens.Space.lg, uart_text, theme.on_surface, .body_l);
-}
-
-fn drawDashboardCard(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect, icon: icons.Id, title: []const u8, detail: []const u8) void {
-    widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container);
-    widgets.strokeRoundRect(logical, r, tokens.Shape.lg, theme.outline_variant, 1);
-    icons.draw(logical, r.x + tokens.Space.lg, r.y + tokens.Space.lg, icon, theme.primary);
-    font.drawTextRole(logical, r.x + 76, r.y + 25, title, theme.on_surface, .title_m);
-    font.drawTextRole(logical, r.x + tokens.Space.lg, r.y + 92, detail, theme.on_surface_variant, .body_l);
-    font.drawTextRole(logical, r.x + tokens.Space.lg, r.y + r.h - 50, "Open", theme.primary, .label_l);
-    icons.draw(logical, r.x + r.w - 52, r.y + r.h - 54, .caret_right, theme.primary);
-}
-
-fn drawFirmwareCard(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, r: geom.Rect) void {
-    widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container);
-    widgets.strokeRoundRect(logical, r, tokens.Shape.lg, theme.outline_variant, 1);
-    icons.draw(logical, r.x + tokens.Space.lg, r.y + tokens.Space.lg, .usb, theme.primary);
-    font.drawTextRole(logical, r.x + 76, r.y + 25, "Firmware Update", theme.on_surface, .title_m);
-    var installed: [64]u8 = undefined;
-    var selected: [64]u8 = undefined;
-    const installed_text = std.fmt.bufPrint(&installed, "Installed: {s}", .{if (state.version_len != 0) shortVersion(state.versionText()) else "unknown"}) catch "Installed: unknown";
-    const selected_text = std.fmt.bufPrint(&selected, "On USB: {s}", .{if (state.image_version_len != 0) shortVersion(state.imageVersionText()) else "no verified image"}) catch "On USB: unavailable";
-    drawFittedText(logical, r.x + tokens.Space.lg, r.y + 92, r.w - tokens.Space.lg * 2, installed_text, theme.on_surface_variant, .body_l);
-    drawFittedText(logical, r.x + tokens.Space.lg, r.y + 132, r.w - tokens.Space.lg * 2, selected_text, theme.on_surface_variant, .body_l);
-    if (state.version_len != 0 and state.image_version_len != 0 and std.mem.eql(u8, state.versionText(), state.imageVersionText())) {
-        font.drawTextRole(logical, r.x + tokens.Space.lg, r.y + 178, "Already installed", theme.primary, .label_m);
-    }
-    font.drawTextRole(logical, r.x + tokens.Space.lg, r.y + r.h - 50, "Open", theme.primary, .label_l);
-    icons.draw(logical, r.x + r.w - 52, r.y + r.h - 54, .caret_right, theme.primary);
-}
-
 fn paintDetailHeading(logical: *fb.LogicalFb, theme: tokens.Theme, lay: *Layout, card: geom.Rect, title: []const u8) i32 {
     const x = card.x + tokens.Space.lg;
     const y = lay.header.back.y + lay.header.back.h + tokens.Space.sm;
@@ -201,29 +155,12 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
     widgets.fillRoundRect(logical, card, tokens.Shape.dialog, theme.elev(3));
     var lay: Layout = .{};
     lay.header = tool_chrome.headerChrome(card);
-    tool_chrome.paintBackToPanel(logical, theme, lay.header.back);
+    tool_chrome.paintBackTo(logical, theme, lay.header.back, "Devices");
     tool_chrome.paintTitle(logical, theme, lay.header.back.x + lay.header.back.w + tokens.Space.sm, lay.header.back.y, "S3");
     tool_chrome.paintExit(logical, theme, lay.header.exit);
 
     const x = card.x + tokens.Space.lg;
     const right = card.x + card.w - tokens.Space.lg;
-
-    if (state.view == .dashboard) {
-        const status_card: geom.Rect = .{ .x = x, .y = lay.header.back.y + lay.header.back.h + tokens.Space.md, .w = right - x, .h = 104 };
-        drawStatusCard(logical, theme, state, status_card);
-        const gap = tokens.Space.lg;
-        const tile_y = status_card.y + status_card.h + gap;
-        const tile_w = @divTrunc(status_card.w - gap, 2);
-        lay.firmware = .{ .x = x, .y = tile_y, .w = tile_w, .h = 300 };
-        lay.settings = .{ .x = x + tile_w + gap, .y = tile_y, .w = tile_w, .h = 300 };
-        drawFirmwareCard(logical, theme, state, lay.firmware);
-        var cfg_detail: [80]u8 = undefined;
-        const cfg_text = if (state.config_loaded)
-            (std.fmt.bufPrint(&cfg_detail, "TX GPIO {d}  /  RX GPIO {d}  /  {d}", .{ state.uart_tx, state.uart_rx, state.uart_baud }) catch "Remote UART configuration")
-        else if (state.config_supported) "Read UART settings from the S3" else "Update S3 firmware to enable settings";
-        drawDashboardCard(logical, theme, lay.settings, .plugs, "UART Settings", cfg_text);
-        return lay;
-    }
 
     var y = paintDetailHeading(logical, theme, &lay, card, if (state.view == .firmware) "Firmware Update" else "UART Settings");
 
@@ -357,8 +294,6 @@ pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
     if (tool_chrome.hitScrim(layout.header, x, y)) return .{ .kind = .scrim };
     if (layout.detail_back.contains(x, y)) return .{ .kind = .detail_back };
     if (layout.refresh.contains(x, y)) return .{ .kind = .refresh };
-    if (layout.firmware.contains(x, y)) return .{ .kind = .firmware };
-    if (layout.settings.contains(x, y)) return .{ .kind = .settings };
     if (layout.tx_minus.contains(x, y)) return .{ .kind = .tx_minus };
     if (layout.tx_plus.contains(x, y)) return .{ .kind = .tx_plus };
     if (layout.rx_minus.contains(x, y)) return .{ .kind = .rx_minus };
@@ -405,20 +340,6 @@ test "S3 firmware view matches the C6 five-row list layout" {
 test "S3 versions are shortened before rendering" {
     try std.testing.expectEqualStrings("v3.1.2", shortVersion("v3.1.2-ota-2-g41f23eb-dirty"));
     try std.testing.expectEqualStrings("v3.1.0", shortVersion("v3.1.0-10-g8166aac-dirty"));
-}
-
-test "S3 dashboard has balanced firmware and settings cards" {
-    const gpa = std.testing.allocator;
-    var logical = try fb.LogicalFb.alloc(gpa);
-    defer logical.deinit(gpa);
-    const state: State = .{ .view = .dashboard, .s3_connected = true, .config_loaded = true, .uart_tx = 8, .uart_rx = 7 };
-    const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
-    try std.testing.expectEqual(lay.firmware.w, lay.settings.w);
-    try std.testing.expectEqual(lay.firmware.h, lay.settings.h);
-    try std.testing.expect(lay.firmware.h >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.settings.h >= tokens.Logical.touch_min);
-    try std.testing.expectEqual(Hit.firmware, hit(lay, lay.firmware.x + 4, lay.firmware.y + 4).kind);
-    try std.testing.expectEqual(Hit.settings, hit(lay, lay.settings.x + 4, lay.settings.y + 4).kind);
 }
 
 test "S3 settings and confirmation controls meet minimum touch size" {

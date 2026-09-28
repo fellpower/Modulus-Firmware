@@ -750,6 +750,8 @@ pub const ZbDevSnap = struct {
     rssi: i8 = 0,
     lqi: u8 = 0,
     short_addr: u16 = 0,
+    /// ZDO application device id; 0xFFF0 is the Modulus Node config endpoint.
+    device_id: u16 = 0,
     volt_raw: u16 = 0,
     curr_raw: u16 = 0,
     power_raw: i16 = 0,

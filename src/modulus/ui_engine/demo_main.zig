@@ -30,6 +30,14 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, a, "--bench")) break true;
     } else false;
 
+    for (args, 0..) |a, i| {
+        if (std.mem.eql(u8, a, "--theme-audit")) {
+            if (i + 1 >= args.len) return error.MissingThemeAuditDirectory;
+            try runThemeAudit(gpa, io, args[i + 1]);
+            return;
+        }
+    }
+
     if (bench) {
         try runBench(gpa, io);
         return;
@@ -41,6 +49,58 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     try runWindow(gpa, io);
+}
+
+fn writePpm(io: std.Io, logical: *const ui_engine.fb.LogicalFb, path: []const u8) !void {
+    const file = try std.Io.Dir.createFileAbsolute(io, path, .{});
+    defer file.close(io);
+    var header: [48]u8 = undefined;
+    const title = try std.fmt.bufPrint(&header, "P6\n{d} {d}\n255\n", .{ logical.w, logical.h });
+    try file.writeStreamingAll(io, title);
+    var row: [ui_engine.tokens.Logical.width * 3]u8 = undefined;
+    for (0..logical.h) |y| {
+        for (0..logical.w) |x| {
+            const rgb = logical.get(@intCast(x), @intCast(y)).toRgb888();
+            row[x * 3] = rgb.r;
+            row[x * 3 + 1] = rgb.g;
+            row[x * 3 + 2] = rgb.b;
+        }
+        try file.writeStreamingAll(io, &row);
+    }
+}
+
+fn runThemeAudit(gpa: std.mem.Allocator, io: std.Io, directory: []const u8) !void {
+    var logical = try ui_engine.fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    var channels: [12]ui_engine.settings_prefs.WirelessPrefs.ZbNodeChannel = [_]ui_engine.settings_prefs.WirelessPrefs.ZbNodeChannel{.{}} ** 12;
+    for ([_][]const u8{ "Relay 1", "Relay 2", "Water" }, 0..) |name, i| {
+        channels[i].typ = if (i == 2) 4 else 2;
+        channels[i].favorite = @intCast(i + 1);
+        channels[i].digital_value = i == 0;
+        @memcpy(channels[i].name[0..name.len], name);
+    }
+    channels[2].temperature_state = 1;
+    channels[2].temperature_centi_c = 4500;
+    channels[2].temp_alarm_active = true;
+    for ([_]bool{ false, true }) |dark| {
+        for (0..ui_engine.settings_prefs.DisplayPrefs.accent_names.len) |accent| {
+            const display: ui_engine.settings_prefs.DisplayPrefs = .{ .darkmode = dark, .accent = @intCast(accent) };
+            const theme = display.buildTheme();
+            var path_buf: [320]u8 = undefined;
+            _ = ui_engine.m_panel.paint(&logical, theme, 0, 1, true, &channels, 0, true, 1);
+            const panel_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}-{d}-m-panel.ppm", .{ directory, if (dark) "dark" else "light", accent });
+            try writePpm(io, &logical, panel_path);
+            _ = ui_engine.m_panel.paint(&logical, theme, 0, 1, false, &channels, 3, false, 0);
+            const controls_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}-{d}-m-panel-controls.ppm", .{ directory, if (dark) "dark" else "light", accent });
+            try writePpm(io, &logical, controls_path);
+            _ = ui_engine.m_panel_update_hub.paint(&logical, theme, true, true, true, true, "2.11.4", "3.1.4", "3.1.4", true, 1);
+            const devices_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}-{d}-devices.ppm", .{ directory, if (dark) "dark" else "light", accent });
+            try writePpm(io, &logical, devices_path);
+            _ = ui_engine.m_panel_update_hub.paint(&logical, theme, true, false, true, false, "2.11.4", "", "3.1.4", false, 1);
+            const offline_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}-{d}-devices-offline.ppm", .{ directory, if (dark) "dark" else "light", accent });
+            try writePpm(io, &logical, offline_path);
+        }
+    }
 }
 
 fn paceFrame(frame_start_ms: u64) void {

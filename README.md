@@ -69,6 +69,9 @@ successful boot from its second OTA slot, have been verified on real hardware.
 > every Zigbee node must be paired again. For normal NanoH2 firmware updates,
 > use the OTA/app image; it preserves the network and paired devices.
 
+If an external Zigbee node remains unavailable or communicates only
+intermittently, see the cautious [Zigbee node recovery procedure](docs/zigbee-node-recovery.md).
+
 For the Tab5 C6, the stock ESP-Hosted firmware already provides slave OTA. The
 P4 OTA-enabled firmware still has to be installed first before **C6 Update** is
 available. If the C6 no longer boots or answers over SDIO, restore its complete

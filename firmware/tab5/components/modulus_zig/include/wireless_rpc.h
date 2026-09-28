@@ -20,6 +20,8 @@ bool modulus_wireless_zb_leave(void);
 bool modulus_wireless_zb_permit_join(uint8_t seconds);
 bool modulus_wireless_zb_get_state(void);
 bool modulus_wireless_zb_get_devices(void);
+/* Increments when a complete device-table response has arrived. */
+uint32_t modulus_wireless_zb_device_list_generation(void);
 bool modulus_wireless_zb_set_level(const modulus_zb_device_t *dev, uint8_t level);
 bool modulus_wireless_zb_cover(const modulus_zb_device_t *dev, uint8_t op);
 bool modulus_wireless_zb_thermo_sp(const modulus_zb_device_t *dev, uint16_t sp_c_x10);

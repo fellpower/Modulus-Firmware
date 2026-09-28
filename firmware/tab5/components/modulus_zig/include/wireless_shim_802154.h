@@ -26,6 +26,10 @@ typedef struct {
     /* Hub mode (NanoH2 Zigbee coordinator): NWK short address learned from the
      * device-announce, and last commanded Level Control brightness (0-254). */
     uint16_t short_addr;
+    /* ZDO Simple Descriptor application device id. 0xFFF0 identifies the
+     * Modulus configuration endpoint. This is local registry metadata, not a
+     * wire-protocol field. */
+    uint16_t device_id;
     uint8_t level;
     /* ZIGBEE_CAP_* bits from ZDO Simple Descriptor discovery; 0 = unknown
      * (legacy raw firmware or discovery pending) -> On/Off assumed. */

@@ -29,6 +29,7 @@ static bool s_zb_hub_fw; /* true once any EVT_HUB_STATE arrives */
 static uint8_t s_zb_ch;
 static uint16_t s_zb_pan;
 static uint8_t s_zb_permit_s;
+static volatile uint32_t s_zb_device_list_gen;
 static modulus_zb_node_info_t s_node_info;
 static modulus_zb_node_channel_t s_node_channels[12];
 static portMUX_TYPE s_temperature_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -220,6 +221,11 @@ static void zigbee_rx(const uint8_t *payload, uint16_t len, void *ctx)
             }
         }
         break;
+    case ZIGBEE_EVT_TABLE_DONE:
+        if (args_len >= 2 && args[0] == 0) {
+            s_zb_device_list_gen++;
+        }
+        break;
     case ZIGBEE_EVT_TEMPERATURE:
         if (args_len == 5 && (((uint16_t)args[0]<<8)|args[1]) == s_node_info.short_addr && args[2]>=10 && args[2]<22) {
             unsigned i=args[2]-10;
@@ -391,6 +397,11 @@ bool modulus_wireless_zb_get_devices(void)
 {
     uint8_t cmd[] = {ZIGBEE_CMD_GET_DEVICES};
     return modulus_zb_uart_send_cmd(cmd, sizeof(cmd));
+}
+
+uint32_t modulus_wireless_zb_device_list_generation(void)
+{
+    return s_zb_device_list_gen;
 }
 
 static bool node_send(uint16_t short_addr, uint8_t node_command,

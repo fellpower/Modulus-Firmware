@@ -9,12 +9,6 @@ const font = @import("font.zig");
 const widgets = @import("widgets.zig");
 const icons_phosphor = @import("icons_phosphor.zig");
 const color = @import("color.zig");
-const panel_bg = color.Rgb565.fromHex(0x001426);
-const panel_card = color.Rgb565.fromHex(0x03233F);
-const panel_card_hi = color.Rgb565.fromHex(0x07345A);
-const panel_cyan = color.Rgb565.fromHex(0x18C8FF);
-const panel_text = color.Rgb565.fromHex(0xF4FAFF);
-const panel_muted = color.Rgb565.fromHex(0xA9C7E5);
 
 pub const ToolId = enum(u8) {
     terminal = 0,
@@ -23,10 +17,11 @@ pub const ToolId = enum(u8) {
     sd = 3,
     zigbee = 4,
     controls = 5,
-    firmware_update = 6,
+    devices = 6,
     c6_update = 7,
     s3_update = 8,
     nano_update = 9,
+    node_update = 10,
 };
 
 pub const Tool = struct {
@@ -43,7 +38,7 @@ pub const tools = [_]Tool{
     .{ .label = "SD Card", .icon = .hard_drives },
     .{ .label = "Zigbee", .icon = .broadcast },
     .{ .label = "All controls", .icon = .plugs },
-    .{ .label = "Firmware Update", .icon = .arrow_down },
+    .{ .label = "Devices", .icon = .arrow_down },
 };
 
 pub fn toolEnabled(index: u8, usb_host: bool) bool {
@@ -153,12 +148,12 @@ fn paintClose(logical: *fb.LogicalFb, theme: tokens.Theme, r: geom.Rect) void {
     widgets.drawTonalCloseButton(logical, r, theme);
 }
 
-fn paintLargeSwitch(logical: *fb.LogicalFb, r: geom.Rect, on: bool) void {
-    widgets.fillRoundRect(logical, r, @divTrunc(r.h, 2), if (on) color.Rgb565.fromHex(0x079DFF) else color.Rgb565.fromHex(0x173B60));
-    widgets.strokeRoundRect(logical, r, @divTrunc(r.h, 2), panel_cyan, 1);
+fn paintLargeSwitch(logical: *fb.LogicalFb, r: geom.Rect, on: bool, theme: tokens.Theme) void {
+    widgets.fillRoundRect(logical, r, @divTrunc(r.h, 2), if (on) theme.primary else theme.surface_container_high);
+    widgets.strokeRoundRect(logical, r, @divTrunc(r.h, 2), if (on) theme.primary else theme.outline_variant, 1);
     const d = r.h - 10;
     const x = if (on) r.x + r.w - d - 5 else r.x + 5;
-    widgets.fillRoundRect(logical, .{ .x = x, .y = r.y + 5, .w = d, .h = d }, @divTrunc(d, 2), panel_text);
+    widgets.fillRoundRect(logical, .{ .x = x, .y = r.y + 5, .w = d, .h = d }, @divTrunc(d, 2), if (on) theme.on_primary else theme.on_surface);
 }
 
 fn paintTile(
@@ -170,10 +165,9 @@ fn paintTile(
     theme: tokens.Theme,
     enabled: bool,
 ) void {
-    _ = fill;
-    widgets.fillRoundRect(logical, r, tokens.Shape.lg, if (enabled) panel_card else theme.surface_container_low);
-    widgets.strokeRoundRect(logical, r, tokens.Shape.lg, if (enabled) panel_cyan else theme.outline_variant, 2);
-    const ink = if (enabled) panel_text else theme.on_surface_variant;
+    widgets.fillRoundRect(logical, r, tokens.Shape.lg, if (enabled) fill else theme.surface_container_low);
+    widgets.strokeRoundRect(logical, r, tokens.Shape.lg, if (enabled) theme.primary else theme.outline_variant, 2);
+    const ink = if (enabled) theme.on_surface else theme.on_surface_variant;
     icons_phosphor.draw(logical, r.x + 30, r.y + @divTrunc(r.h - icon_px, 2), icon, ink);
     if (label.len != 0) {
         font.drawTextRole(logical, r.x + 86, r.y + @divTrunc(r.h - font.faceHeight(font.faceForRole(.title_m)), 2), label, ink, .title_m);
@@ -196,19 +190,19 @@ pub fn paint(
     espnow_connected: bool,
     zigbee_online: u8,
 ) Layout {
-    logical.fillRect(.{ .x = 0, .y = 0, .w = tokens.Logical.width, .h = tokens.Logical.height }, panel_bg);
+    logical.fillRect(.{ .x = 0, .y = 0, .w = tokens.Logical.width, .h = tokens.Logical.height }, theme.surface_dim);
     const card = cardGeom(enter_t);
-    widgets.fillRoundRect(logical, card, tokens.Shape.dialog, panel_bg);
-    widgets.strokeRoundRect(logical, card, tokens.Shape.dialog, panel_cyan, 1);
+    widgets.fillRoundRect(logical, card, tokens.Shape.dialog, theme.elev(3));
+    widgets.strokeRoundRect(logical, card, tokens.Shape.dialog, theme.outline_variant, 1);
 
     var lay: Layout = .{ .card = card };
     const title_y = card.y + tokens.Space.md;
-    font.drawTextRole(logical, card.x + tokens.Space.lg, title_y, "Modulus   |   M-Panel", panel_text, .title_l);
-    font.drawTextRole(logical, card.x + 430, title_y, "Ready", color.Rgb565.fromHex(0x00EE88), .title_m);
-    font.drawTextRole(logical, card.x + 620, title_y, if (espnow_connected) "ESP-NOW Connected" else "ESP-NOW Offline", if (espnow_connected) panel_cyan else panel_muted, .title_m);
+    font.drawTextRole(logical, card.x + tokens.Space.lg, title_y, "Modulus   |   M-Panel", theme.on_surface, .title_l);
+    font.drawTextRole(logical, card.x + 430, title_y, "Ready", theme.primary, .title_m);
+    font.drawTextRole(logical, card.x + 620, title_y, if (espnow_connected) "ESP-NOW Connected" else "ESP-NOW Offline", if (espnow_connected) theme.primary else theme.on_surface_variant, .title_m);
     var zb_buf: [24]u8 = undefined;
     const zb_text = std.fmt.bufPrint(&zb_buf, "Zigbee {d} online", .{zigbee_online}) catch "Zigbee";
-    font.drawTextRole(logical, card.x + 930, title_y, zb_text, if (zigbee_online > 0) panel_cyan else panel_muted, .title_m);
+    font.drawTextRole(logical, card.x + 930, title_y, zb_text, if (zigbee_online > 0) theme.primary else theme.on_surface_variant, .title_m);
     const th = font.faceHeight(font.faceForRole(.title_l));
     lay.close = .{
         .x = card.x + card.w - close_sz - tokens.Space.md,
@@ -248,7 +242,7 @@ pub fn paint(
         return lay;
     }
 
-    font.drawTextRole(logical, card.x + tokens.Space.lg, card.y + 82, "Quick controls", panel_text, .title_l);
+    font.drawTextRole(logical, card.x + tokens.Space.lg, card.y + 82, "Quick controls", theme.on_surface, .title_l);
     const quick_y = card.y + 128;
     const quick_h: i32 = 238;
     const quick_gap: i32 = 16;
@@ -258,11 +252,11 @@ pub fn paint(
         const r: geom.Rect = .{ .x = card.x + tokens.Space.lg + @as(i32, @intCast(pos)) * (quick_w + quick_gap), .y = quick_y, .w = quick_w, .h = quick_h };
         lay.quick[pos] = r;
         if (pos == 3) {
-            widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card_hi);
-            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, panel_cyan, 2);
-            icons_phosphor.draw(logical, r.x + 32, r.y + 36, .cards_three, panel_cyan);
-            font.drawTextRole(logical, r.x + 92, r.y + 30, "All controls", panel_text, .title_l);
-            font.drawTextRole(logical, r.x + 92, r.y + 86, "12 channels  |  3 pages", panel_muted, .body_m);
+            widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container_high);
+            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, theme.primary, 2);
+            icons_phosphor.draw(logical, r.x + 32, r.y + 36, .cards_three, theme.primary);
+            font.drawTextRole(logical, r.x + 92, r.y + 30, "All controls", theme.on_surface, .title_l);
+            font.drawTextRole(logical, r.x + 92, r.y + 86, "12 channels  |  3 pages", theme.on_surface_variant, .body_m);
             widgets.drawFilledButton(logical, .{ .x = r.x + 32, .y = r.y + 150, .w = r.w - 64, .h = 64 }, "Open controls", theme);
             continue;
         }
@@ -274,25 +268,25 @@ pub fn paint(
         };
         lay.favorite_channels[pos] = found;
         if (found == 0xff) {
-            widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card);
-            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, panel_cyan, 2);
+            widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container);
+            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, theme.primary, 2);
             const plus: geom.Rect = .{ .x = r.x + @divTrunc(r.w - 88, 2), .y = r.y + 24, .w = 88, .h = 88 };
-            widgets.fillRoundRect(logical, plus, 44, color.Rgb565.fromHex(0x079DFF));
-            logical.fillRect(.{ .x = plus.x + 20, .y = plus.y + 40, .w = 48, .h = 8 }, panel_text);
-            logical.fillRect(.{ .x = plus.x + 40, .y = plus.y + 20, .w = 8, .h = 48 }, panel_text);
+            widgets.fillRoundRect(logical, plus, 44, theme.primary);
+            logical.fillRect(.{ .x = plus.x + 20, .y = plus.y + 40, .w = 48, .h = 8 }, theme.on_primary);
+            logical.fillRect(.{ .x = plus.x + 40, .y = plus.y + 20, .w = 8, .h = 48 }, theme.on_primary);
             const add = "Add quick control";
-            font.drawTextRole(logical, r.x + @divTrunc(r.w - font.textWidthStr(add, .title_m), 2), r.y + 126, add, panel_text, .title_m);
+            font.drawTextRole(logical, r.x + @divTrunc(r.w - font.textWidthStr(add, .title_m), 2), r.y + 126, add, theme.on_surface, .title_m);
             const hint = "Tap to choose";
-            font.drawTextRole(logical, r.x + @divTrunc(r.w - font.textWidthStr(hint, .body_m), 2), r.y + 176, hint, panel_muted, .body_m);
+            font.drawTextRole(logical, r.x + @divTrunc(r.w - font.textWidthStr(hint, .body_m), 2), r.y + 176, hint, theme.on_surface_variant, .body_m);
         } else {
             const ch = channels[found];
             var fallback: [20]u8 = undefined;
             const saved = std.mem.sliceTo(&ch.name, 0);
             const label = if (saved.len != 0) saved else std.fmt.bufPrint(&fallback, "Channel {d}", .{found + 1}) catch "Channel";
-            widgets.fillRoundRect(logical, r, tokens.Shape.lg, panel_card);
-            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, if (ch.temp_alarm_active) theme.err else panel_cyan, 2);
-            icons_phosphor.draw(logical, r.x + 32, r.y + 36, if (ch.typ == 4) .thermometer_simple else .plugs, if (ch.temp_alarm_active) theme.err else panel_cyan);
-            font.drawTextRole(logical, r.x + 92, r.y + 30, label, panel_text, .title_l);
+            widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container);
+            widgets.strokeRoundRect(logical, r, tokens.Shape.lg, if (ch.temp_alarm_active) theme.err else theme.primary, 2);
+            icons_phosphor.draw(logical, r.x + 32, r.y + 36, if (ch.typ == 4) .thermometer_simple else .plugs, if (ch.temp_alarm_active) theme.err else theme.primary);
+            font.drawTextRole(logical, r.x + 92, r.y + 30, label, theme.on_surface, .title_l);
             var state_buf: [24]u8 = undefined;
             const state = if (ch.typ == 4) switch (ch.temperature_state) {
                 0 => "Waiting for reading",
@@ -307,12 +301,12 @@ pub fn paint(
             lay.quick_configure[pos] = .{ .x = r.x + 24, .y = r.y + 158, .w = 112, .h = 56 };
             widgets.drawFilledButton(logical, lay.quick_configure[pos], "Configure", theme);
             if (ch.typ == 1 or ch.typ == 2) {
-                paintLargeSwitch(logical, .{ .x = r.x + 148, .y = r.y + 158, .w = r.w - 172, .h = 56 }, ch.digital_value);
+                paintLargeSwitch(logical, .{ .x = r.x + 148, .y = r.y + 158, .w = r.w - 172, .h = 56 }, ch.digital_value, theme);
             }
         }
     }
 
-    font.drawTextRole(logical, card.x + tokens.Space.lg, card.y + 378, "Tools", panel_text, .title_l);
+    font.drawTextRole(logical, card.x + tokens.Space.lg, card.y + 378, "Tools", theme.on_surface, .title_l);
     var i: usize = 0;
     while (i < tools.len and lay.tile_n < lay.tiles.len) : (i += 1) {
         if (i == @intFromEnum(ToolId.controls)) continue;

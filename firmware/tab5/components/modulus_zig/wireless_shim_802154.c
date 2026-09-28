@@ -122,6 +122,8 @@ static void zb_load_nvs(void)
         s_zb_devs[i].level = modulus_nvs_get_u8(key, 254);
         zb_dev_key(key, sizeof(key), i, "cp");
         s_zb_devs[i].caps = modulus_nvs_get_u8(key, 0);
+        zb_dev_key(key, sizeof(key), i, "di");
+        s_zb_devs[i].device_id = modulus_nvs_get_u16(key, 0);
         zb_dev_key(key, sizeof(key), i, "md");
         modulus_nvs_get_str(key, s_zb_devs[i].model, sizeof(s_zb_devs[i].model));
         s_zb_devs[i].rssi = 0;
@@ -205,6 +207,8 @@ static void zb_save_nvs(void)
         modulus_nvs_set_u8(key, s_zb_devs[i].level);
         zb_dev_key(key, sizeof(key), i, "cp");
         modulus_nvs_set_u8(key, s_zb_devs[i].caps);
+        zb_dev_key(key, sizeof(key), i, "di");
+        modulus_nvs_set_u16(key, s_zb_devs[i].device_id);
         zb_dev_key(key, sizeof(key), i, "md");
         modulus_nvs_set_str(key, s_zb_devs[i].model);
     }
@@ -473,6 +477,7 @@ void modulus_wireless_zb_note_device_caps(uint16_t short_addr, uint8_t endpoint,
         int i = found;
         s_zb_devs[i].endpoint = ep;
         s_zb_devs[i].caps = caps;
+        s_zb_devs[i].device_id = device_id;
         if (strncmp(s_zb_devs[i].name, "Dev ", 4) == 0) {
             const char *kind = (caps & ZIGBEE_CAP_LEVEL)      ? "Light"
                                : (caps & ZIGBEE_CAP_COVER)      ? "Cover"

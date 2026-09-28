@@ -52,6 +52,10 @@ Der Reiter **Releases** enthält die Installationsdateien, Anleitung und Prüfsu
 > Zigbee-Nodes erneut angelernt werden. Für normale NanoH2-Aktualisierungen das
 > OTA-/App-Image verwenden; dabei bleiben Netzwerk und Geräte erhalten.
 
+Wenn ein externer Zigbee-Node nicht erreichbar bleibt oder nur zeitweise
+kommuniziert, siehe die vorsichtige
+[Anleitung zur Node-Wiederherstellung](docs/zigbee-node-recovery.md).
+
 Das Ziel über seinen normalen USB-Anschluss verbinden und die passende einzelne
 Full-BIN an Adresse `0x0` schreiben. Beispiel für den XIAO (`COM8` durch seinen
 tatsächlichen Port ersetzen):

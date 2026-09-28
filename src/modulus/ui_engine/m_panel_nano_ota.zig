@@ -7,14 +7,13 @@ const fb = @import("fb.zig");
 const font = @import("font.zig");
 const widgets = @import("widgets.zig");
 const tool_chrome = @import("m_panel_tool.zig");
-const icons = @import("icons_phosphor.zig");
 
 pub const max_files = 8;
 pub const name_len = 96;
 
 pub const Phase = enum(u8) { idle, ready, armed, flashing, success, failed };
 pub const Action = enum(u8) { refresh, select, check, flash };
-pub const View = enum(u8) { dashboard, firmware };
+pub const View = enum(u8) { firmware };
 
 pub const State = struct {
     phase: Phase = .idle,
@@ -30,7 +29,7 @@ pub const State = struct {
     file_lens: [max_files]u8 = .{0} ** max_files,
     status: [160]u8 = .{0} ** 160,
     status_len: u8 = 0,
-    view: View = .dashboard,
+    view: View = .firmware,
 
     pub fn statusText(self: *const State) []const u8 {
         return self.status[0..self.status_len];
@@ -47,12 +46,11 @@ pub const State = struct {
     }
 };
 
-pub const Hit = enum { none, scrim, back, exit, detail_back, firmware, refresh, row, check, flash };
+pub const Hit = enum { none, scrim, back, exit, detail_back, refresh, row, check, flash };
 pub const HitInfo = struct { kind: Hit = .none, index: u8 = 0 };
 pub const Layout = struct {
     header: tool_chrome.Header = .{},
     detail_back: geom.Rect = .{},
-    firmware: geom.Rect = .{},
     refresh: geom.Rect = .{},
     rows: [max_files]geom.Rect = [_]geom.Rect{.{}} ** max_files,
     row_n: u8 = 0,
@@ -87,57 +85,18 @@ fn drawFittedText(logical: *fb.LogicalFb, x: i32, y: i32, max_w: i32, text: []co
     font.drawTextRole(logical, x, y, buf[0 .. keep + suffix.len], ink, role);
 }
 
-fn drawStatusCard(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, r: geom.Rect) void {
-    widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container_low);
-    const dot: geom.Rect = .{ .x = r.x + tokens.Space.lg, .y = r.y + 24, .w = 18, .h = 18 };
-    widgets.fillRoundRect(logical, dot, 9, if (state.nano_connected) theme.primary else theme.tertiary);
-    font.drawTextRole(logical, dot.x + 34, r.y + 16, "NanoH2 Zigbee Coordinator", theme.on_surface, .title_m);
-    font.drawTextRole(logical, dot.x + 34, r.y + 51, if (state.nano_connected) "UART connected" else "NanoH2 not connected", theme.on_surface_variant, .body_m);
-    if (state.version_len != 0) {
-        var version: [48]u8 = undefined;
-        const version_text = std.fmt.bufPrint(&version, "Firmware: {s}", .{state.versionText()}) catch "Firmware version unavailable";
-        drawFittedText(logical, r.x + r.w - 330, r.y + 18, 306, version_text, theme.primary, .body_m);
-    }
-}
-
-fn drawDashboardCard(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, r: geom.Rect) void {
-    widgets.fillRoundRect(logical, r, tokens.Shape.lg, theme.surface_container);
-    widgets.strokeRoundRect(logical, r, tokens.Shape.lg, theme.outline_variant, 1);
-    icons.draw(logical, r.x + tokens.Space.lg, r.y + tokens.Space.lg, .usb, theme.primary);
-    font.drawTextRole(logical, r.x + 76, r.y + 25, "Firmware Update", theme.on_surface, .title_m);
-    var installed: [64]u8 = undefined;
-    var selected: [64]u8 = undefined;
-    const installed_text = std.fmt.bufPrint(&installed, "Installed: {s}", .{if (state.version_len != 0) state.versionText() else "unknown"}) catch "Installed: unknown";
-    const selected_text = std.fmt.bufPrint(&selected, "On USB: {s}", .{if (state.image_version_len != 0) state.imageVersionText() else "no verified image"}) catch "On USB: unavailable";
-    drawFittedText(logical, r.x + tokens.Space.lg, r.y + 92, r.w - tokens.Space.lg * 2, installed_text, theme.on_surface_variant, .body_l);
-    drawFittedText(logical, r.x + tokens.Space.lg, r.y + 132, r.w - tokens.Space.lg * 2, selected_text, theme.on_surface_variant, .body_l);
-    if (state.version_len != 0 and state.image_version_len != 0 and std.mem.eql(u8, state.versionText(), state.imageVersionText())) {
-        font.drawTextRole(logical, r.x + tokens.Space.lg, r.y + 178, "Already installed", theme.primary, .label_m);
-    }
-    font.drawTextRole(logical, r.x + tokens.Space.lg, r.y + r.h - 50, "Open", theme.primary, .label_l);
-    icons.draw(logical, r.x + r.w - 52, r.y + r.h - 54, .caret_right, theme.primary);
-}
-
 pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, enter_t: f32) Layout {
     widgets.fillScrim(logical, theme);
     const card = cardGeom(enter_t);
     widgets.fillRoundRect(logical, card, tokens.Shape.dialog, theme.elev(3));
     var lay: Layout = .{};
     lay.header = tool_chrome.headerChrome(card);
-    tool_chrome.paintBackToPanel(logical, theme, lay.header.back);
+    tool_chrome.paintBackTo(logical, theme, lay.header.back, "Devices");
     tool_chrome.paintTitle(logical, theme, lay.header.back.x + lay.header.back.w + tokens.Space.sm, lay.header.back.y, "NanoH2");
     tool_chrome.paintExit(logical, theme, lay.header.exit);
 
     const x = card.x + tokens.Space.lg;
     const right = card.x + card.w - tokens.Space.lg;
-    if (state.view == .dashboard) {
-        const status_card: geom.Rect = .{ .x = x, .y = lay.header.back.y + lay.header.back.h + tokens.Space.md, .w = right - x, .h = 104 };
-        drawStatusCard(logical, theme, state, status_card);
-        lay.firmware = .{ .x = x, .y = status_card.y + status_card.h + tokens.Space.lg, .w = right - x, .h = 300 };
-        drawDashboardCard(logical, theme, state, lay.firmware);
-        return lay;
-    }
-
     var y = lay.header.back.y + lay.header.back.h + tokens.Space.sm;
     lay.detail_back = .{ .x = x, .y = y, .w = 64, .h = 56 };
     widgets.drawTonalButton(logical, lay.detail_back, "<", theme);
@@ -205,7 +164,6 @@ pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
     if (tool_chrome.hitExit(layout.header, x, y)) return .{ .kind = .exit };
     if (tool_chrome.hitScrim(layout.header, x, y)) return .{ .kind = .scrim };
     if (layout.detail_back.contains(x, y)) return .{ .kind = .detail_back };
-    if (layout.firmware.contains(x, y)) return .{ .kind = .firmware };
     if (layout.refresh.contains(x, y)) return .{ .kind = .refresh };
     var i: u8 = 0;
     while (i < layout.row_n) : (i += 1) if (layout.rows[i].contains(x, y)) return .{ .kind = .row, .index = i };
@@ -225,14 +183,4 @@ test "NanoH2 OTA buttons meet minimum touch size" {
     try std.testing.expect(lay.flash.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.refresh.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.rows[0].h >= tokens.Logical.touch_min);
-}
-
-test "NanoH2 dashboard exposes one large firmware card" {
-    const gpa = std.testing.allocator;
-    var logical = try fb.LogicalFb.alloc(gpa);
-    defer logical.deinit(gpa);
-    const state: State = .{ .view = .dashboard, .nano_connected = true };
-    const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
-    try std.testing.expect(lay.firmware.h >= tokens.Logical.touch_min);
-    try std.testing.expectEqual(Hit.firmware, hit(lay, lay.firmware.x + 4, lay.firmware.y + 4).kind);
 }
