@@ -451,7 +451,10 @@ void modulus_espnow_stack_set_aux_evt_hook(modulus_espnow_stack_evt_fn fn, void 
 
 bool modulus_espnow_stack_send_configured_peer(const uint8_t *data, size_t len)
 {
-    if (!data || len == 0 || len > ESPNOW_MAX_PAYLOAD || !modulus_wireless_ready()) {
+    /* S3 management shares this stack, but must honor the user's radio toggle.
+     * Check the central enable state before any on-demand stack initialization. */
+    if (!modulus_wireless_espnow_is_enabled() || !data || len == 0 ||
+        len > ESPNOW_MAX_PAYLOAD || !modulus_wireless_ready()) {
         return false;
     }
     char mac_str[20];

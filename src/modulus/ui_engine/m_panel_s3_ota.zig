@@ -1,6 +1,7 @@
 //! M-Panel S3 Update — guarded ESP-NOW OTA from USB.
 
 const std = @import("std");
+const color = @import("color.zig");
 const geom = @import("geom.zig");
 const tokens = @import("tokens.zig");
 const fb = @import("fb.zig");
@@ -37,6 +38,8 @@ pub const State = struct {
     file_lens: [max_files]u8 = .{0} ** max_files,
     status: [160]u8 = .{0} ** 160,
     status_len: u8 = 0,
+    /// Render-time mirror of the central WirelessPrefs ESP-NOW enable state.
+    espnow_enabled: bool = true,
     view: View = .firmware,
     config_supported: bool = false,
     test_supported: bool = false,
@@ -69,11 +72,23 @@ pub const State = struct {
     }
 };
 
-pub const Hit = enum { none, scrim, back, exit, detail_back, refresh, row, check, flash, restart, tx_pin, rx_pin, pin_option, pin_select_close, pin_select_outside, baud, test_cnc, review, cancel, apply };
+pub fn shouldInitializeDraft(
+    config_supported: bool,
+    config_busy: bool,
+    config_loaded: bool,
+    previous_profile_id: u8,
+    reply_profile_id: u8,
+) bool {
+    const profile_became_known = previous_profile_id == 0 and reply_profile_id != 0;
+    return config_supported and !config_busy and (!config_loaded or profile_became_known);
+}
+
+pub const Hit = enum { none, scrim, back, exit, detail_back, refresh, enable_espnow, row, check, flash, restart, tx_pin, rx_pin, pin_option, pin_select_close, pin_select_outside, baud, test_cnc, review, cancel, apply };
 pub const HitInfo = struct { kind: Hit = .none, index: u8 = 0 };
 pub const Layout = struct {
     header: tool_chrome.Header = .{},
     refresh: geom.Rect = .{},
+    enable_espnow: geom.Rect = .{},
     rows: [max_files]geom.Rect = [_]geom.Rect{.{}} ** max_files,
     row_n: u8 = 0,
     check: geom.Rect = .{},
@@ -105,7 +120,9 @@ fn pinAllowed(state: *const State, target: PinSelectTarget, gpio: u8) bool {
     return (mask & (@as(u64, 1) << @intCast(gpio))) != 0;
 }
 
-fn pinLabel(buf: *[16]u8, state: *const State, gpio: u8) []const u8 {
+fn pinValueLabel(buf: []u8, state: *const State, value: i32) []const u8 {
+    if (value < 0 or value > gpio_max) return "GPIO ?";
+    const gpio: u8 = @intCast(value);
     if (state.board_profile_id == board_profile_xiao) {
         if (gpioToXiaoDigitalPin(gpio)) |digital_pin| return std.fmt.bufPrint(buf, "D{d}", .{digital_pin}) catch "D?";
     }
@@ -114,8 +131,7 @@ fn pinLabel(buf: *[16]u8, state: *const State, gpio: u8) []const u8 {
 
 fn settingsPinLabel(buf: *[16]u8, state: *const State, target: PinSelectTarget) []const u8 {
     const value = if (target == .tx) state.draft_tx else state.draft_rx;
-    if (value < 0 or value > gpio_max) return "GPIO ?";
-    return pinLabel(buf, state, @intCast(value));
+    return pinValueLabel(buf, state, value);
 }
 
 fn drawValueRow(logical: *fb.LogicalFb, theme: tokens.Theme, area: geom.Rect, label: []const u8, state: *const State, target: PinSelectTarget, hit_rect: *geom.Rect) void {
@@ -160,7 +176,7 @@ fn paintPinSelector(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const S
         };
         lay.pin_options[gpio] = rect;
         var label_buf: [16]u8 = undefined;
-        widgets.drawTonalButton(logical, rect, pinLabel(&label_buf, state, gpio), theme);
+        widgets.drawTonalButton(logical, rect, pinValueLabel(&label_buf, state, gpio), theme);
     }
 }
 
@@ -235,6 +251,14 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
 
     var y = paintDetailHeading(logical, theme, &lay, card, if (state.view == .firmware) "Firmware Update" else "UART Settings");
 
+    if (!state.espnow_enabled) {
+        font.drawTextRole(logical, x, y + 26, "ESP-NOW is disabled.", theme.on_surface, .title_m);
+        font.drawTextRole(logical, x, y + 88, "Enable ESP-NOW to configure or update the S3.", theme.on_surface_variant, .body_l);
+        lay.enable_espnow = .{ .x = x, .y = y + 168, .w = 300, .h = 64 };
+        widgets.drawFilledButton(logical, lay.enable_espnow, "Enable ESP-NOW", theme);
+        return lay;
+    }
+
     if (state.view != .firmware) {
         const link = if (state.s3_connected) "Connected via ESP-NOW" else "S3 not connected";
         font.drawTextRole(logical, x, y, link, if (state.s3_connected) theme.primary else theme.on_error_container, .body_m);
@@ -290,8 +314,14 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
                 font.drawTextRole(logical, box.x + 32, ry, label, theme.on_surface_variant, .body_m);
                 var before: [24]u8 = undefined;
                 var after: [24]u8 = undefined;
-                const before_txt = std.fmt.bufPrint(&before, "{d}", .{old[i]}) catch "?";
-                const after_txt = std.fmt.bufPrint(&after, "{d}", .{new[i]}) catch "?";
+                const before_txt = if (i < 2)
+                    pinValueLabel(&before, state, @intCast(old[i]))
+                else
+                    std.fmt.bufPrint(&before, "{d}", .{old[i]}) catch "?";
+                const after_txt = if (i < 2)
+                    pinValueLabel(&after, state, @intCast(new[i]))
+                else
+                    std.fmt.bufPrint(&after, "{d}", .{new[i]}) catch "?";
                 font.drawTextRole(logical, box.x + 290, ry, before_txt, theme.on_surface_variant, .body_l);
                 font.drawTextRole(logical, box.x + 405, ry, "->", theme.on_surface_variant, .body_l);
                 font.drawTextRole(logical, box.x + 485, ry, after_txt, theme.primary, .body_l);
@@ -377,6 +407,7 @@ pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
     if (tool_chrome.hitExit(layout.header, x, y)) return .{ .kind = .exit };
     if (tool_chrome.hitScrim(layout.header, x, y)) return .{ .kind = .scrim };
     if (layout.detail_back.contains(x, y)) return .{ .kind = .detail_back };
+    if (layout.enable_espnow.contains(x, y)) return .{ .kind = .enable_espnow };
     if (layout.refresh.contains(x, y)) return .{ .kind = .refresh };
     if (layout.tx_pin.contains(x, y)) return .{ .kind = .tx_pin };
     if (layout.rx_pin.contains(x, y)) return .{ .kind = .rx_pin };
@@ -446,33 +477,186 @@ test "S3 settings and confirmation controls meet minimum touch size" {
 }
 
 test "XIAO labels reuse the D0-D10 GPIO map" {
-    const expected = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
+    const expected = [_]u8{ 1, 2, 3, 4, 5, 6, 43, 44, 7, 8, 9 };
     for (expected, 0..) |gpio, pin| {
         try std.testing.expectEqual(@as(?u32, @intCast(pin)), xiao_pins.gpioToDigitalPin(@intCast(gpio)));
     }
-    try std.testing.expect(gpioToXiaoDigitalPin(43) == null);
+    try std.testing.expectEqual(@as(?u8, 8), gpioToXiaoDigitalPin(7));
+    try std.testing.expectEqual(@as(?u8, 9), gpioToXiaoDigitalPin(8));
 }
 
 test "settings show current XIAO TX/RX pins using D labels" {
     var label_buf: [16]u8 = undefined;
     const state: State = .{
         .board_profile_id = board_profile_xiao,
-        .draft_tx = 16,
-        .draft_rx = 18,
+        .draft_tx = 7,
+        .draft_rx = 8,
     };
-    try std.testing.expectEqualStrings("D6", settingsPinLabel(&label_buf, &state, .tx));
-    try std.testing.expectEqualStrings("D10", settingsPinLabel(&label_buf, &state, .rx));
+    try std.testing.expectEqualStrings("D8", settingsPinLabel(&label_buf, &state, .tx));
+    try std.testing.expectEqualStrings("D9", settingsPinLabel(&label_buf, &state, .rx));
 }
 
 test "settings show current Generic TX/RX pins using GPIO labels" {
     var label_buf: [16]u8 = undefined;
     const state: State = .{
         .board_profile_id = 3,
-        .draft_tx = 16,
-        .draft_rx = 18,
+        .draft_tx = 7,
+        .draft_rx = 8,
     };
-    try std.testing.expectEqualStrings("GPIO16", settingsPinLabel(&label_buf, &state, .tx));
-    try std.testing.expectEqualStrings("GPIO18", settingsPinLabel(&label_buf, &state, .rx));
+    try std.testing.expectEqualStrings("GPIO7", settingsPinLabel(&label_buf, &state, .tx));
+    try std.testing.expectEqualStrings("GPIO8", settingsPinLabel(&label_buf, &state, .rx));
+}
+
+fn expectRenderedButtonLabel(logical: *const fb.LogicalFb, rect: geom.Rect, label: []const u8, theme: tokens.Theme) !void {
+    const gpa = std.testing.allocator;
+    var expected = try fb.LogicalFb.alloc(gpa);
+    defer expected.deinit(gpa);
+    widgets.drawTonalButton(&expected, rect, label, theme);
+    var y = rect.y + 14;
+    while (y < rect.y + rect.h - 14) : (y += 1) {
+        var x = rect.x + 14;
+        while (x < rect.x + rect.w - 14) : (x += 1) {
+            try std.testing.expectEqual(expected.get(x, y).toU16(), logical.get(x, y).toU16());
+        }
+    }
+}
+
+test "real settings render path displays XIAO D pins and Generic GPIO values" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    const theme = tokens.Theme.industrialTealDark();
+    var state: State = .{
+        .view = .settings,
+        .config_supported = true,
+        .s3_connected = true,
+        .board_profile_id = board_profile_xiao,
+        .draft_tx = 7,
+        .draft_rx = 8,
+    };
+    var layout = paint(&logical, theme, &state, 1);
+    try expectRenderedButtonLabel(&logical, layout.tx_pin, "D8", theme);
+    try expectRenderedButtonLabel(&logical, layout.rx_pin, "D9", theme);
+
+    state.board_profile_id = 3;
+    layout = paint(&logical, theme, &state, 1);
+    try expectRenderedButtonLabel(&logical, layout.tx_pin, "GPIO7", theme);
+    try expectRenderedButtonLabel(&logical, layout.rx_pin, "GPIO8", theme);
+
+    state.uart_tx_gpio_mask = (@as(u64, 1) << 7) | (@as(u64, 1) << 8) | (@as(u64, 1) << 43);
+    state.uart_rx_gpio_mask = (@as(u64, 1) << 7) | (@as(u64, 1) << 8) | (@as(u64, 1) << 44);
+    state.pin_select_target = .tx;
+    state.board_profile_id = board_profile_xiao;
+    layout = paint(&logical, theme, &state, 1);
+    try expectRenderedButtonLabel(&logical, layout.pin_options[7], "D8", theme);
+    try expectRenderedButtonLabel(&logical, layout.pin_options[8], "D9", theme);
+    try std.testing.expect(layout.pin_options[43].w > 0); // D6 = GPIO43.
+
+    state.board_profile_id = 3;
+    layout = paint(&logical, theme, &state, 1);
+    try expectRenderedButtonLabel(&logical, layout.pin_options[7], "GPIO7", theme);
+    try expectRenderedButtonLabel(&logical, layout.pin_options[8], "GPIO8", theme);
+}
+
+fn expectRenderedReviewValue(logical: *const fb.LogicalFb, x: i32, y: i32, width: i32, label: []const u8, ink: color.Rgb565, theme: tokens.Theme) !void {
+    const gpa = std.testing.allocator;
+    var expected = try fb.LogicalFb.alloc(gpa);
+    defer expected.deinit(gpa);
+    const region: geom.Rect = .{ .x = x, .y = y, .w = width, .h = 42 };
+    expected.fillRect(region, theme.elev(5));
+    font.drawTextRole(&expected, x, y, label, ink, .body_l);
+    var py = region.y;
+    while (py < region.y + region.h) : (py += 1) {
+        var px = region.x;
+        while (px < region.x + region.w) : (px += 1) {
+            try std.testing.expectEqual(expected.get(px, py).toU16(), logical.get(px, py).toU16());
+        }
+    }
+}
+
+test "real Review and Apply render path uses profile-aware labels" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    const theme = tokens.Theme.industrialTealDark();
+    var state: State = .{
+        .view = .review,
+        .config_supported = true,
+        .board_profile_id = board_profile_xiao,
+        .uart_tx = 7,
+        .uart_rx = 8,
+        .draft_tx = 7,
+        .draft_rx = 8,
+    };
+    _ = paint(&logical, theme, &state, 1);
+    const card = cardGeom(1);
+    const box_x = card.x + 270;
+    const box_y = card.y + 125;
+    try expectRenderedReviewValue(&logical, box_x + 290, box_y + 92, 100, "D8", theme.on_surface_variant, theme);
+    try expectRenderedReviewValue(&logical, box_x + 485, box_y + 92, 150, "D8", theme.primary, theme);
+    try expectRenderedReviewValue(&logical, box_x + 290, box_y + 150, 100, "D9", theme.on_surface_variant, theme);
+    try expectRenderedReviewValue(&logical, box_x + 485, box_y + 150, 150, "D9", theme.primary, theme);
+
+    state.board_profile_id = 3;
+    _ = paint(&logical, theme, &state, 1);
+    try expectRenderedReviewValue(&logical, box_x + 290, box_y + 92, 100, "GPIO7", theme.on_surface_variant, theme);
+    try expectRenderedReviewValue(&logical, box_x + 485, box_y + 92, 150, "GPIO7", theme.primary, theme);
+    try expectRenderedReviewValue(&logical, box_x + 290, box_y + 150, 100, "GPIO8", theme.on_surface_variant, theme);
+    try expectRenderedReviewValue(&logical, box_x + 485, box_y + 150, 150, "GPIO8", theme.primary, theme);
+}
+
+test "config drafts initialize after refresh or when a previously unknown board profile arrives" {
+    try std.testing.expect(!shouldInitializeDraft(true, true, false, 0, board_profile_xiao));
+    try std.testing.expect(!shouldInitializeDraft(true, false, true, board_profile_xiao, board_profile_xiao));
+    try std.testing.expect(shouldInitializeDraft(true, false, false, 0, board_profile_xiao));
+    try std.testing.expect(shouldInitializeDraft(true, false, true, 0, board_profile_xiao));
+    try std.testing.expect(!shouldInitializeDraft(true, false, true, 3, board_profile_xiao));
+    try std.testing.expect(!shouldInitializeDraft(false, false, false, 0, board_profile_xiao));
+}
+
+test "late XIAO profile reply repaints initial Settings and Review labels without a pin selection" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    const theme = tokens.Theme.industrialTealDark();
+    var state: State = .{
+        .view = .settings,
+        .config_supported = true,
+        .config_loaded = false,
+        .board_profile_id = 0,
+        .uart_tx = 7,
+        .uart_rx = 8,
+        .draft_tx = 7,
+        .draft_rx = 8,
+    };
+
+    var layout = paint(&logical, theme, &state, 1);
+    try expectRenderedButtonLabel(&logical, layout.tx_pin, "GPIO7", theme);
+    try expectRenderedButtonLabel(&logical, layout.rx_pin, "GPIO8", theme);
+
+    try std.testing.expect(shouldInitializeDraft(
+        state.config_supported,
+        state.config_busy,
+        state.config_loaded,
+        state.board_profile_id,
+        board_profile_xiao,
+    ));
+    state.board_profile_id = board_profile_xiao;
+    state.draft_tx = state.uart_tx;
+    state.draft_rx = state.uart_rx;
+    layout = paint(&logical, theme, &state, 1);
+    try expectRenderedButtonLabel(&logical, layout.tx_pin, "D8", theme);
+    try expectRenderedButtonLabel(&logical, layout.rx_pin, "D9", theme);
+
+    state.view = .review;
+    _ = paint(&logical, theme, &state, 1);
+    const card = cardGeom(1);
+    const box_x = card.x + 270;
+    const box_y = card.y + 125;
+    try expectRenderedReviewValue(&logical, box_x + 290, box_y + 92, 100, "D8", theme.on_surface_variant, theme);
+    try expectRenderedReviewValue(&logical, box_x + 485, box_y + 92, 150, "D8", theme.primary, theme);
+    try expectRenderedReviewValue(&logical, box_x + 290, box_y + 150, 100, "D9", theme.on_surface_variant, theme);
+    try expectRenderedReviewValue(&logical, box_x + 485, box_y + 150, 150, "D9", theme.primary, theme);
 }
 
 test "pin selector exposes only S3 masks and uses board-specific labels" {
@@ -484,25 +668,52 @@ test "pin selector exposes only S3 masks and uses board-specific labels" {
         .config_supported = true,
         .uart_pin_options_available = true,
         .board_profile_id = board_profile_xiao,
-        .uart_tx_gpio_mask = (@as(u64, 1) << 1) | (@as(u64, 1) << 22) | (@as(u64, 1) << 43),
+        .uart_tx_gpio_mask = (@as(u64, 1) << 1) | (@as(u64, 1) << 7) | (@as(u64, 1) << 8) | (@as(u64, 1) << 43),
         .pin_select_target = .tx,
     };
     const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
     try std.testing.expect(lay.pin_selector_active);
     try std.testing.expectEqual(@as(i32, 0), lay.pin_options[0].w);
     try std.testing.expect(lay.pin_options[1].w > 0);
-    try std.testing.expect(lay.pin_options[22].w > 0);
-    try std.testing.expect(lay.pin_options[43].w == 0); // XIAO UI only uses D0-D10.
+    try std.testing.expect(lay.pin_options[7].w > 0);
+    try std.testing.expect(lay.pin_options[8].w > 0);
+    try std.testing.expect(lay.pin_options[43].w > 0); // D6 = GPIO43.
+    try std.testing.expect(lay.pin_options[22].w == 0);
     var label_buf: [16]u8 = undefined;
-    try std.testing.expectEqualStrings("D1", pinLabel(&label_buf, &state, 1));
-    try std.testing.expectEqual(Hit.pin_option, hit(lay, lay.pin_options[22].x + 3, lay.pin_options[22].y + 3).kind);
+    try std.testing.expectEqualStrings("D8", pinValueLabel(&label_buf, &state, 7));
+    try std.testing.expectEqualStrings("D9", pinValueLabel(&label_buf, &state, 8));
+    try std.testing.expectEqual(Hit.pin_option, hit(lay, lay.pin_options[7].x + 3, lay.pin_options[7].y + 3).kind);
 
     state.board_profile_id = 11;
     state.uart_tx_gpio_mask = (@as(u64, 1) << 7) | (@as(u64, 1) << 43);
     const generic = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
     try std.testing.expect(generic.pin_options[7].w > 0);
     try std.testing.expect(generic.pin_options[43].w > 0);
-    try std.testing.expectEqualStrings("GPIO7", pinLabel(&label_buf, &state, 7));
+    try std.testing.expectEqualStrings("GPIO7", pinValueLabel(&label_buf, &state, 7));
+}
+
+test "real XIAO mask exposes D1-D10 except the HALT pin D0" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    const xiao_mask: u64 = 0x00019fc00007fffc;
+    var state: State = .{
+        .view = .settings,
+        .config_supported = true,
+        .uart_pin_options_available = true,
+        .board_profile_id = board_profile_xiao,
+        .uart_tx_gpio_mask = xiao_mask,
+        .uart_rx_gpio_mask = xiao_mask,
+        .pin_select_target = .tx,
+    };
+    const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
+    try std.testing.expect(lay.pin_options[1].w == 0); // D0 = GPIO1 is reserved for HALT.
+    for ([_]u8{ 2, 3, 4, 5, 6, 43, 44, 7, 8, 9 }) |gpio| {
+        try std.testing.expect(lay.pin_options[gpio].w > 0);
+    }
+    var label_buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("D8", pinValueLabel(&label_buf, &state, 7));
+    try std.testing.expectEqualStrings("D9", pinValueLabel(&label_buf, &state, 8));
 }
 
 test "legacy S3 config has no selectable pin fallback" {
@@ -513,4 +724,31 @@ test "legacy S3 config has no selectable pin fallback" {
     const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
     try std.testing.expect(!lay.pin_selector_active);
     try std.testing.expect(lay.tx_pin.w > 0);
+}
+
+test "S3 management page exposes only explicit ESP-NOW enable while radio is off" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    var state: State = .{
+        .espnow_enabled = false,
+        .view = .settings,
+        .config_supported = true,
+        .test_supported = true,
+        .file_count = 1,
+        .phase = .armed,
+    };
+    const settings = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
+    try std.testing.expect(settings.enable_espnow.w > 0);
+    try std.testing.expect(settings.refresh.w == 0);
+    try std.testing.expect(settings.test_cnc.w == 0);
+    try std.testing.expect(settings.tx_pin.w == 0);
+    try std.testing.expectEqual(Hit.enable_espnow, hit(settings, settings.enable_espnow.x + 3, settings.enable_espnow.y + 3).kind);
+
+    state.view = .firmware;
+    const firmware = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
+    try std.testing.expect(firmware.enable_espnow.w > 0);
+    try std.testing.expect(firmware.refresh.w == 0);
+    try std.testing.expect(firmware.check.w == 0);
+    try std.testing.expect(firmware.flash.w == 0);
 }

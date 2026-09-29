@@ -113,9 +113,11 @@ test "zigbee node GPIO choices match firmware safety rules" {
     try std.testing.expect(!zigbeeChannelGpioAllowed(5));
     try std.testing.expect(!zigbeeChannelGpioAllowed(15));
     try std.testing.expect(zigbeeStatusLedGpioAllowed(15));
-    try std.testing.expectEqual(@as(?u32, 23), xiao_pins.digitalPinToGpio(5));
-    try std.testing.expectEqual(@as(?u32, 16), xiao_pins.digitalPinToGpio(6));
-    try std.testing.expectEqual(@as(?u32, 5), xiao_pins.gpioToDigitalPin(23));
+    try std.testing.expectEqual(@as(?u32, 6), xiao_pins.digitalPinToGpio(5));
+    try std.testing.expectEqual(@as(?u32, 43), xiao_pins.digitalPinToGpio(6));
+    try std.testing.expectEqual(@as(?u32, 4), xiao_pins.gpioToDigitalPin(5));
+    try std.testing.expectEqual(@as(?u32, 8), xiao_pins.gpioToDigitalPin(7));
+    try std.testing.expectEqual(@as(?u32, 9), xiao_pins.gpioToDigitalPin(8));
 }
 
 const FocusKind = enum { none, gear, power, search, close };
@@ -804,6 +806,8 @@ pub const Engine = struct {
                     self.m_panel_fx.value,
                 );
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.s3_update)) {
+                self.m_panel_s3_ota_state.espnow_enabled = self.prefs.wireless.espnow;
+                if (!self.prefs.wireless.espnow) self.m_panel_s3_ota_state.pin_select_target = .none;
                 self.m_panel_s3_ota_layout = m_panel_s3_ota.paint(
                     &self.logical,
                     self.theme,
@@ -6215,7 +6219,9 @@ pub const Engine = struct {
         }
         if (index == @intFromEnum(m_panel.ToolId.devices)) {
             if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
-            if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            if (self.prefs.wireless.espnow) {
+                if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+            }
             if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
         }
         if (index == @intFromEnum(m_panel.ToolId.terminal) and self.m_panel_term_auto_scroll) {
@@ -6262,7 +6268,10 @@ pub const Engine = struct {
             },
             .s3 => {
                 self.m_panel_s3_ota_state.view = .firmware;
-                if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                self.m_panel_s3_ota_state.espnow_enabled = self.prefs.wireless.espnow;
+                if (self.prefs.wireless.espnow) {
+                    if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                }
             },
             .nano => {
                 self.m_panel_nano_ota_state.view = .firmware;
@@ -6310,7 +6319,29 @@ pub const Engine = struct {
     fn openS3UartSettings(self: *Engine) void {
         self.m_panel_s3_ota_state.view = .settings;
         self.m_panel_s3_ota_state.config_loaded = false;
-        if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
+        self.m_panel_s3_ota_state.espnow_enabled = self.prefs.wireless.espnow;
+        if (self.prefs.wireless.espnow) {
+            if (self.s3_ota_cmd_sink) |sink| sink(self, .config_refresh, 0);
+        }
+    }
+
+    fn enableEspnowForS3(self: *Engine) void {
+        self.prefs.wireless.espnow = true;
+        if (self.prefs_dirty_sink) |prefs_sink| {
+            // Reuse the normal preference path; it owns the central radio enable.
+            prefs_sink(self);
+            self.m_panel_s3_ota_state.espnow_enabled = self.prefs.wireless.espnow;
+            if (self.prefs.wireless.espnow) {
+                const action: m_panel_s3_ota.Action = if (self.m_panel_s3_ota_state.view == .settings) .config_refresh else .refresh;
+                if (self.s3_ota_cmd_sink) |sink| sink(self, action, 0);
+            } else {
+                self.showSnackbarError("ESP-NOW could not be enabled");
+            }
+        } else {
+            self.prefs.wireless.espnow = false;
+            self.m_panel_s3_ota_state.espnow_enabled = false;
+            self.showSnackbarError("ESP-NOW enable is unavailable");
+        }
     }
 
     fn openDeviceConfiguration(self: *Engine, target: m_panel_update_hub.Target) void {
@@ -6464,7 +6495,9 @@ pub const Engine = struct {
                     .configure => self.openDeviceConfiguration(h.target),
                     .refresh => {
                         if (self.c6_ota_cmd_sink) |sink| sink(self, .refresh, 0);
-                        if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                        if (self.prefs.wireless.espnow) {
+                            if (self.s3_ota_cmd_sink) |sink| sink(self, .refresh, 0);
+                        }
                         if (self.nano_ota_cmd_sink) |sink| sink(self, .refresh, 0);
                         self.showSnackbar("USB drive rescanned");
                         self.requestFull();
@@ -6492,6 +6525,11 @@ pub const Engine = struct {
                 self.requestFull();
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.s3_update)) {
                 const h = m_panel_s3_ota.hit(self.m_panel_s3_ota_layout, x, y);
+                if (h.kind == .enable_espnow) {
+                    self.enableEspnowForS3();
+                    self.requestFull();
+                    return;
+                }
                 if (self.m_panel_s3_ota_state.pin_select_target != .none) {
                     switch (h.kind) {
                         .pin_option => {
@@ -6514,7 +6552,9 @@ pub const Engine = struct {
                         .cancel => self.m_panel_s3_ota_state.view = .settings,
                         .apply => if (!self.m_panel_s3_ota_state.config_busy) {
                             self.m_panel_s3_ota_state.view = .settings;
-                            if (self.s3_ota_cmd_sink) |sink| sink(self, .config_apply, 0);
+                            if (self.prefs.wireless.espnow) {
+                                if (self.s3_ota_cmd_sink) |sink| sink(self, .config_apply, 0);
+                            }
                         },
                         .exit => self.closeToolToDashboard(),
                         else => {},
@@ -6527,16 +6567,20 @@ pub const Engine = struct {
                     .scrim, .back, .detail_back => self.returnToMPanelFromTool(),
                     .exit => self.closeToolToDashboard(),
                     .refresh => if (self.s3_ota_cmd_sink) |sink| {
-                        if (self.m_panel_s3_ota_state.view == .settings) sink(self, .config_refresh, 0) else sink(self, .refresh, 0);
+                        if (!self.prefs.wireless.espnow) {
+                            self.showSnackbarError("Enable ESP-NOW to contact the S3");
+                        } else if (self.m_panel_s3_ota_state.view == .settings) sink(self, .config_refresh, 0) else sink(self, .refresh, 0);
                     },
-                    .row => if (self.s3_ota_cmd_sink) |sink| sink(self, .select, h.index),
-                    .check => if (self.m_panel_s3_ota_state.file_count > 0 and self.m_panel_s3_ota_state.phase != .flashing) {
+                    .row => if (self.prefs.wireless.espnow) {
+                        if (self.s3_ota_cmd_sink) |sink| sink(self, .select, h.index);
+                    },
+                    .check => if (self.prefs.wireless.espnow and self.m_panel_s3_ota_state.file_count > 0 and self.m_panel_s3_ota_state.phase != .flashing) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .check, 0);
                     },
-                    .flash => if (self.m_panel_s3_ota_state.phase == .armed) {
+                    .flash => if (self.prefs.wireless.espnow and self.m_panel_s3_ota_state.phase == .armed) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .flash, 0);
                     },
-                    .restart => if (self.m_panel_s3_ota_state.phase == .success) {
+                    .restart => if (self.prefs.wireless.espnow and self.m_panel_s3_ota_state.phase == .success) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .restart, 0);
                     },
                     .tx_pin => if (self.m_panel_s3_ota_state.config_supported) {
@@ -6562,13 +6606,13 @@ pub const Engine = struct {
                             else => 115200,
                         };
                     },
-                    .test_cnc => if (self.m_panel_s3_ota_state.test_supported and !self.m_panel_s3_ota_state.config_busy) {
+                    .test_cnc => if (self.prefs.wireless.espnow and self.m_panel_s3_ota_state.test_supported and !self.m_panel_s3_ota_state.config_busy) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .config_test, 0);
                     },
-                    .review => if (self.m_panel_s3_ota_state.config_supported and !self.m_panel_s3_ota_state.config_busy) {
+                    .review => if (self.prefs.wireless.espnow and self.m_panel_s3_ota_state.config_supported and !self.m_panel_s3_ota_state.config_busy) {
                         self.m_panel_s3_ota_state.view = .review;
                     },
-                    .cancel, .apply => {},
+                    .enable_espnow, .cancel, .apply => {},
                 }
                 self.requestFull();
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.nano_update)) {
@@ -9429,6 +9473,58 @@ test "S3 device actions open existing update and UART settings views" {
     try std.testing.expectEqual(m_panel_s3_ota.View.settings, eng.m_panel_s3_ota_state.view);
 }
 
+var test_s3_management_action_count: u8 = 0;
+var test_s3_management_last_action: ?m_panel_s3_ota.Action = null;
+var test_s3_enable_prefs_count: u8 = 0;
+
+fn testS3ManagementSink(_: *Engine, action: m_panel_s3_ota.Action, _: u8) void {
+    test_s3_management_action_count += 1;
+    test_s3_management_last_action = action;
+}
+
+fn testS3EnablePrefsSink(eng: *Engine) void {
+    test_s3_enable_prefs_count += 1;
+    // Model the existing prefsDirty -> applyWirelessRadios path succeeding.
+    eng.prefs.wireless.espnow = true;
+}
+
+test "S3 management stays silent with ESP-NOW off until explicit enable" {
+    test_s3_management_action_count = 0;
+    test_s3_management_last_action = null;
+    test_s3_enable_prefs_count = 0;
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    eng.s3_ota_cmd_sink = testS3ManagementSink;
+    eng.prefs_dirty_sink = testS3EnablePrefsSink;
+
+    eng.openMPanelTool(@intFromEnum(m_panel.ToolId.devices));
+    try std.testing.expectEqual(@as(u8, 0), test_s3_management_action_count);
+    eng.openDeviceUpdate(.s3);
+    try std.testing.expectEqual(@as(u8, 0), test_s3_management_action_count);
+    try std.testing.expect(!eng.m_panel_s3_ota_state.espnow_enabled);
+    eng.openDeviceConfiguration(.s3);
+    try std.testing.expectEqual(@as(u8, 0), test_s3_management_action_count);
+
+    const off_layout = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+    try std.testing.expect(off_layout.enable_espnow.w > 0);
+    try std.testing.expectEqual(@as(i32, 0), off_layout.refresh.w);
+    try std.testing.expectEqual(@as(i32, 0), off_layout.test_cnc.w);
+    eng.m_panel_s3_ota_layout = off_layout;
+    eng.handleMPanelClick(off_layout.enable_espnow.x + 2, off_layout.enable_espnow.y + 2);
+
+    try std.testing.expectEqual(@as(u8, 1), test_s3_enable_prefs_count);
+    try std.testing.expect(eng.prefs.wireless.espnow);
+    try std.testing.expectEqual(@as(u8, 1), test_s3_management_action_count);
+    try std.testing.expectEqual(m_panel_s3_ota.Action.config_refresh, test_s3_management_last_action.?);
+
+    // With the central enable state on, the existing Configure path still refreshes.
+    eng.openDeviceConfiguration(.s3);
+    try std.testing.expectEqual(@as(u8, 2), test_s3_management_action_count);
+    try std.testing.expectEqual(m_panel_s3_ota.Action.config_refresh, test_s3_management_last_action.?);
+}
+
 var test_node_refresh_count: u8 = 0;
 var test_node_open_count: u8 = 0;
 
@@ -9522,6 +9618,7 @@ test "device review and gesture Back preserve the parent route" {
     var eng = try Engine.create(gpa);
     defer eng.destroy(gpa);
     eng.skipBoot();
+    eng.prefs.wireless.espnow = true;
     eng.openMPanelTool(@intFromEnum(m_panel.ToolId.devices));
     eng.openDeviceConfiguration(.s3);
     eng.m_panel_s3_ota_state.config_supported = true;

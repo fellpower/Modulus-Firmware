@@ -1446,6 +1446,7 @@ fn s3OtaPoll(eng: *Engine) void {
     var snap: c.modulus_s3_ota_snapshot_t = undefined;
     c.modulus_s3_ota_get_snapshot(&snap);
     var next = eng.m_panel_s3_ota_state;
+    const previous_board_profile_id = next.board_profile_id;
     next.phase = @enumFromInt(@min(@as(u8, @intCast(snap.phase)), @intFromEnum(ui_engine.m_panel_s3_ota.Phase.failed)));
     next.file_count = @min(@as(u8, @intCast(snap.file_count)), ui_engine.m_panel_s3_ota.max_files);
     next.selected = @min(@as(u8, @intCast(snap.selected)), if (next.file_count > 0) next.file_count - 1 else 0);
@@ -1461,7 +1462,13 @@ fn s3OtaPoll(eng: *Engine) void {
     next.uart_tx = snap.uart_tx_gpio;
     next.uart_rx = snap.uart_rx_gpio;
     next.uart_baud = snap.uart_baud;
-    if (snap.uart_config_supported and !next.config_loaded) {
+    if (ui_engine.m_panel_s3_ota.shouldInitializeDraft(
+        snap.uart_config_supported,
+        snap.uart_config_busy,
+        next.config_loaded,
+        previous_board_profile_id,
+        snap.board_profile_id,
+    )) {
         next.draft_tx = snap.uart_tx_gpio;
         next.draft_rx = snap.uart_rx_gpio;
         next.draft_baud = snap.uart_baud;

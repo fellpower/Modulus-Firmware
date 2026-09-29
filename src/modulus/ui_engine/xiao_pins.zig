@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const digital_to_gpio = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
+const digital_to_gpio = [_]u8{ 1, 2, 3, 4, 5, 6, 43, 44, 7, 8, 9 };
 
 pub fn digitalPinToGpio(pin: u32) ?u32 {
     if (pin >= digital_to_gpio.len) return null;
@@ -20,4 +20,6 @@ test "XIAO D0-D10 mapping round trips" {
         try std.testing.expectEqual(@as(?u32, @intCast(pin)), gpioToDigitalPin(@intCast(gpio)));
     }
     try std.testing.expect(digitalPinToGpio(11) == null);
+    try std.testing.expectEqual(@as(?u32, 8), gpioToDigitalPin(7));
+    try std.testing.expectEqual(@as(?u32, 9), gpioToDigitalPin(8));
 }
