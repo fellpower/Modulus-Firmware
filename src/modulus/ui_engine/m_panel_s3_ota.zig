@@ -112,13 +112,18 @@ fn pinLabel(buf: *[16]u8, state: *const State, gpio: u8) []const u8 {
     return std.fmt.bufPrint(buf, "GPIO{d}", .{gpio}) catch "GPIO?";
 }
 
-fn drawValueRow(logical: *fb.LogicalFb, theme: tokens.Theme, area: geom.Rect, label: []const u8, state: *const State, value: i32, hit_rect: *geom.Rect) void {
+fn settingsPinLabel(buf: *[16]u8, state: *const State, target: PinSelectTarget) []const u8 {
+    const value = if (target == .tx) state.draft_tx else state.draft_rx;
+    if (value < 0 or value > gpio_max) return "GPIO ?";
+    return pinLabel(buf, state, @intCast(value));
+}
+
+fn drawValueRow(logical: *fb.LogicalFb, theme: tokens.Theme, area: geom.Rect, label: []const u8, state: *const State, target: PinSelectTarget, hit_rect: *geom.Rect) void {
     widgets.fillRoundRect(logical, area, tokens.Shape.lg, theme.surface_container_low);
     font.drawTextRole(logical, area.x + tokens.Space.lg, area.y + 12, label, theme.on_surface_variant, .label_m);
     hit_rect.* = .{ .x = area.x + tokens.Space.lg, .y = area.y + 43, .w = area.w - tokens.Space.lg * 2, .h = 58 };
     var buf: [16]u8 = undefined;
-    const txt = if (value >= 0 and value <= gpio_max) pinLabel(&buf, state, @intCast(value)) else "GPIO ?";
-    widgets.drawTonalButton(logical, hit_rect.*, txt, theme);
+    widgets.drawTonalButton(logical, hit_rect.*, settingsPinLabel(&buf, state, target), theme);
 }
 
 fn paintPinSelector(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, lay: *Layout) void {
@@ -244,8 +249,8 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
         const col_w = @divTrunc((right - x) - gap, 2);
         const tx_card: geom.Rect = .{ .x = x, .y = y, .w = col_w, .h = 116 };
         const rx_card: geom.Rect = .{ .x = x + col_w + gap, .y = y, .w = col_w, .h = 116 };
-        drawValueRow(logical, theme, tx_card, "UART transmit pin", state, state.draft_tx, &lay.tx_pin);
-        drawValueRow(logical, theme, rx_card, "UART receive pin", state, state.draft_rx, &lay.rx_pin);
+        drawValueRow(logical, theme, tx_card, "UART transmit pin", state, .tx, &lay.tx_pin);
+        drawValueRow(logical, theme, rx_card, "UART receive pin", state, .rx, &lay.rx_pin);
         y += 132;
         if (!state.uart_pin_options_available) {
             font.drawTextRole(logical, x, y, "Update S3 firmware to enable safe UART pin selection.", theme.on_error_container, .body_m);
@@ -446,6 +451,28 @@ test "XIAO labels reuse the D0-D10 GPIO map" {
         try std.testing.expectEqual(@as(?u32, @intCast(pin)), xiao_pins.gpioToDigitalPin(@intCast(gpio)));
     }
     try std.testing.expect(gpioToXiaoDigitalPin(43) == null);
+}
+
+test "settings show current XIAO TX/RX pins using D labels" {
+    var label_buf: [16]u8 = undefined;
+    const state: State = .{
+        .board_profile_id = board_profile_xiao,
+        .draft_tx = 16,
+        .draft_rx = 18,
+    };
+    try std.testing.expectEqualStrings("D6", settingsPinLabel(&label_buf, &state, .tx));
+    try std.testing.expectEqualStrings("D10", settingsPinLabel(&label_buf, &state, .rx));
+}
+
+test "settings show current Generic TX/RX pins using GPIO labels" {
+    var label_buf: [16]u8 = undefined;
+    const state: State = .{
+        .board_profile_id = 3,
+        .draft_tx = 16,
+        .draft_rx = 18,
+    };
+    try std.testing.expectEqualStrings("GPIO16", settingsPinLabel(&label_buf, &state, .tx));
+    try std.testing.expectEqualStrings("GPIO18", settingsPinLabel(&label_buf, &state, .rx));
 }
 
 test "pin selector exposes only S3 masks and uses board-specific labels" {
