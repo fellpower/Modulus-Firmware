@@ -7,12 +7,21 @@ const fb = @import("fb.zig");
 const font = @import("font.zig");
 const widgets = @import("widgets.zig");
 const tool_chrome = @import("m_panel_tool.zig");
+const xiao_pins = @import("xiao_pins.zig");
 
 pub const max_files = 8;
 pub const name_len = 96;
 pub const Phase = enum(u8) { idle, ready, armed, flashing, success, failed };
 pub const Action = enum(u8) { refresh, select, check, flash, restart, config_refresh, config_apply, config_test };
 pub const View = enum(u8) { firmware, settings, review };
+pub const PinSelectTarget = enum(u8) { none, tx, rx };
+
+pub const board_profile_xiao: u8 = 7;
+const gpio_max: u8 = 48;
+const pin_grid_columns: i32 = 7;
+const pin_grid_cell_w: i32 = 112;
+const pin_grid_cell_h: i32 = 56;
+const pin_grid_gap: i32 = 8;
 
 pub const State = struct {
     phase: Phase = .idle,
@@ -33,6 +42,11 @@ pub const State = struct {
     test_supported: bool = false,
     config_busy: bool = false,
     config_loaded: bool = false,
+    uart_pin_options_available: bool = false,
+    board_profile_id: u8 = 0,
+    uart_tx_gpio_mask: u64 = 0,
+    uart_rx_gpio_mask: u64 = 0,
+    pin_select_target: PinSelectTarget = .none,
     uart_tx: i8 = -1,
     uart_rx: i8 = -1,
     uart_baud: u32 = 115200,
@@ -55,7 +69,7 @@ pub const State = struct {
     }
 };
 
-pub const Hit = enum { none, scrim, back, exit, detail_back, refresh, row, check, flash, restart, tx_minus, tx_plus, rx_minus, rx_plus, baud, test_cnc, review, cancel, apply };
+pub const Hit = enum { none, scrim, back, exit, detail_back, refresh, row, check, flash, restart, tx_pin, rx_pin, pin_option, pin_select_close, pin_select_outside, baud, test_cnc, review, cancel, apply };
 pub const HitInfo = struct { kind: Hit = .none, index: u8 = 0 };
 pub const Layout = struct {
     header: tool_chrome.Header = .{},
@@ -66,10 +80,11 @@ pub const Layout = struct {
     flash: geom.Rect = .{},
     restart: geom.Rect = .{},
     detail_back: geom.Rect = .{},
-    tx_minus: geom.Rect = .{},
-    tx_plus: geom.Rect = .{},
-    rx_minus: geom.Rect = .{},
-    rx_plus: geom.Rect = .{},
+    tx_pin: geom.Rect = .{},
+    rx_pin: geom.Rect = .{},
+    pin_selector_active: bool = false,
+    pin_selector_close: geom.Rect = .{},
+    pin_options: [49]geom.Rect = [_]geom.Rect{.{}} ** 49,
     baud: geom.Rect = .{},
     test_cnc: geom.Rect = .{},
     review: geom.Rect = .{},
@@ -79,18 +94,69 @@ pub const Layout = struct {
     status_area: geom.Rect = .{},
 };
 
-fn drawValueRow(logical: *fb.LogicalFb, theme: tokens.Theme, area: geom.Rect, label: []const u8, value: i32, minus: *geom.Rect, plus: *geom.Rect) void {
+fn gpioToXiaoDigitalPin(gpio: u8) ?u8 {
+    if (xiao_pins.gpioToDigitalPin(@intCast(gpio))) |pin| return @intCast(pin);
+    return null;
+}
+
+fn pinAllowed(state: *const State, target: PinSelectTarget, gpio: u8) bool {
+    if (gpio > gpio_max) return false;
+    const mask = if (target == .tx) state.uart_tx_gpio_mask else if (target == .rx) state.uart_rx_gpio_mask else 0;
+    return (mask & (@as(u64, 1) << @intCast(gpio))) != 0;
+}
+
+fn pinLabel(buf: *[16]u8, state: *const State, gpio: u8) []const u8 {
+    if (state.board_profile_id == board_profile_xiao) {
+        if (gpioToXiaoDigitalPin(gpio)) |digital_pin| return std.fmt.bufPrint(buf, "D{d}", .{digital_pin}) catch "D?";
+    }
+    return std.fmt.bufPrint(buf, "GPIO{d}", .{gpio}) catch "GPIO?";
+}
+
+fn drawValueRow(logical: *fb.LogicalFb, theme: tokens.Theme, area: geom.Rect, label: []const u8, state: *const State, value: i32, hit_rect: *geom.Rect) void {
     widgets.fillRoundRect(logical, area, tokens.Shape.lg, theme.surface_container_low);
     font.drawTextRole(logical, area.x + tokens.Space.lg, area.y + 12, label, theme.on_surface_variant, .label_m);
-    const control_y = area.y + 43;
-    minus.* = .{ .x = area.x + tokens.Space.lg, .y = control_y, .w = 72, .h = 58 };
-    plus.* = .{ .x = area.x + area.w - tokens.Space.lg - 72, .y = control_y, .w = 72, .h = 58 };
-    widgets.drawTonalButton(logical, minus.*, "-", theme);
-    widgets.drawTonalButton(logical, plus.*, "+", theme);
+    hit_rect.* = .{ .x = area.x + tokens.Space.lg, .y = area.y + 43, .w = area.w - tokens.Space.lg * 2, .h = 58 };
     var buf: [16]u8 = undefined;
-    const txt = std.fmt.bufPrint(&buf, "GPIO {d}", .{value}) catch "GPIO ?";
-    const tw = font.textWidthStr(txt, .title_m);
-    font.drawTextRole(logical, area.x + @divTrunc(area.w - tw, 2), control_y + 14, txt, theme.primary, .title_m);
+    const txt = if (value >= 0 and value <= gpio_max) pinLabel(&buf, state, @intCast(value)) else "GPIO ?";
+    widgets.drawTonalButton(logical, hit_rect.*, txt, theme);
+}
+
+fn paintPinSelector(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, lay: *Layout) void {
+    if (state.pin_select_target == .none) return;
+    lay.pin_selector_active = true;
+    widgets.paintScrimOver(logical, .{ .x = 0, .y = 0, .w = tokens.Logical.width, .h = tokens.Logical.height }, theme);
+    const box: geom.Rect = .{ .x = 180, .y = 72, .w = 920, .h = 576 };
+    widgets.fillRoundRect(logical, box, tokens.Shape.dialog, theme.elev(5));
+    const target_name = if (state.pin_select_target == .tx) "UART transmit pin" else "UART receive pin";
+    font.drawTextRole(logical, box.x + 32, box.y + 22, target_name, theme.on_surface, .title_m);
+    font.drawTextRole(logical, box.x + 32, box.y + 66, "Select an allowed pin", theme.on_surface_variant, .body_m);
+    lay.pin_selector_close = .{ .x = box.x + box.w - 132, .y = box.y + 16, .w = 100, .h = 56 };
+    widgets.drawTonalButton(logical, lay.pin_selector_close, "Cancel", theme);
+
+    const start_x = box.x + 32;
+    const start_y = box.y + 112;
+    var gpio: u8 = 0;
+    while (gpio <= gpio_max) : (gpio += 1) {
+        if (!pinAllowed(state, state.pin_select_target, gpio)) continue;
+        if (state.board_profile_id == board_profile_xiao and gpioToXiaoDigitalPin(gpio) == null) continue;
+        const choice_index: i32 = @intCast(@popCount((if (state.pin_select_target == .tx) state.uart_tx_gpio_mask else state.uart_rx_gpio_mask) & ((@as(u64, 1) << @intCast(gpio)) - 1)));
+        // XIAO options are displayed in D0..D10 order, matching the board header.
+        const index: i32 = if (state.board_profile_id == board_profile_xiao)
+            @intCast(gpioToXiaoDigitalPin(gpio).?)
+        else
+            choice_index;
+        const col = @mod(index, pin_grid_columns);
+        const row = @divTrunc(index, pin_grid_columns);
+        const rect: geom.Rect = .{
+            .x = start_x + col * (pin_grid_cell_w + pin_grid_gap),
+            .y = start_y + row * (pin_grid_cell_h + pin_grid_gap),
+            .w = pin_grid_cell_w,
+            .h = pin_grid_cell_h,
+        };
+        lay.pin_options[gpio] = rect;
+        var label_buf: [16]u8 = undefined;
+        widgets.drawTonalButton(logical, rect, pinLabel(&label_buf, state, gpio), theme);
+    }
 }
 
 fn cardGeom(t0: f32) geom.Rect {
@@ -178,9 +244,13 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
         const col_w = @divTrunc((right - x) - gap, 2);
         const tx_card: geom.Rect = .{ .x = x, .y = y, .w = col_w, .h = 116 };
         const rx_card: geom.Rect = .{ .x = x + col_w + gap, .y = y, .w = col_w, .h = 116 };
-        drawValueRow(logical, theme, tx_card, "UART transmit pin", state.draft_tx, &lay.tx_minus, &lay.tx_plus);
-        drawValueRow(logical, theme, rx_card, "UART receive pin", state.draft_rx, &lay.rx_minus, &lay.rx_plus);
+        drawValueRow(logical, theme, tx_card, "UART transmit pin", state, state.draft_tx, &lay.tx_pin);
+        drawValueRow(logical, theme, rx_card, "UART receive pin", state, state.draft_rx, &lay.rx_pin);
         y += 132;
+        if (!state.uart_pin_options_available) {
+            font.drawTextRole(logical, x, y, "Update S3 firmware to enable safe UART pin selection.", theme.on_error_container, .body_m);
+            y += 34;
+        }
         const baud_card: geom.Rect = .{ .x = x, .y = y, .w = right - x, .h = 104 };
         widgets.fillRoundRect(logical, baud_card, tokens.Shape.lg, theme.surface_container_low);
         font.drawTextRole(logical, baud_card.x + tokens.Space.lg, baud_card.y + 13, "Baud rate", theme.on_surface_variant, .label_m);
@@ -227,6 +297,7 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
             widgets.drawTonalButton(logical, lay.cancel, "Cancel", theme);
             widgets.drawFilledButton(logical, lay.apply, "Apply", theme);
         }
+        paintPinSelector(logical, theme, state, &lay);
         return lay;
     }
     const link = if (state.s3_connected) "S3 connected via ESP-NOW" else "S3 bridge not connected";
@@ -289,15 +360,21 @@ pub fn paint(logical: *fb.LogicalFb, theme: tokens.Theme, state: *const State, e
 }
 
 pub fn hit(layout: Layout, x: i32, y: i32) HitInfo {
+    if (layout.pin_selector_active) {
+        if (layout.pin_selector_close.contains(x, y)) return .{ .kind = .pin_select_close };
+        var gpio: u8 = 0;
+        while (gpio <= gpio_max) : (gpio += 1) {
+            if (layout.pin_options[gpio].contains(x, y)) return .{ .kind = .pin_option, .index = gpio };
+        }
+        return .{ .kind = .pin_select_outside };
+    }
     if (tool_chrome.hitBack(layout.header, x, y)) return .{ .kind = .back };
     if (tool_chrome.hitExit(layout.header, x, y)) return .{ .kind = .exit };
     if (tool_chrome.hitScrim(layout.header, x, y)) return .{ .kind = .scrim };
     if (layout.detail_back.contains(x, y)) return .{ .kind = .detail_back };
     if (layout.refresh.contains(x, y)) return .{ .kind = .refresh };
-    if (layout.tx_minus.contains(x, y)) return .{ .kind = .tx_minus };
-    if (layout.tx_plus.contains(x, y)) return .{ .kind = .tx_plus };
-    if (layout.rx_minus.contains(x, y)) return .{ .kind = .rx_minus };
-    if (layout.rx_plus.contains(x, y)) return .{ .kind = .rx_plus };
+    if (layout.tx_pin.contains(x, y)) return .{ .kind = .tx_pin };
+    if (layout.rx_pin.contains(x, y)) return .{ .kind = .rx_pin };
     if (layout.baud.contains(x, y)) return .{ .kind = .baud };
     if (layout.test_cnc.contains(x, y)) return .{ .kind = .test_cnc };
     if (layout.review.contains(x, y)) return .{ .kind = .review };
@@ -348,17 +425,65 @@ test "S3 settings and confirmation controls meet minimum touch size" {
     defer logical.deinit(gpa);
     var state: State = .{ .view = .settings, .s3_connected = true, .config_supported = true, .config_loaded = true, .draft_tx = 3, .draft_rx = 4 };
     var lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
-    try std.testing.expect(lay.tx_minus.h >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.tx_plus.h >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.rx_minus.h >= tokens.Logical.touch_min);
-    try std.testing.expect(lay.rx_plus.h >= tokens.Logical.touch_min);
+    try std.testing.expect(lay.tx_pin.h >= tokens.Logical.touch_min);
+    try std.testing.expect(lay.rx_pin.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.baud.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.test_cnc.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.review.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.refresh.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.detail_back.h >= tokens.Logical.touch_min);
+    try std.testing.expectEqual(Hit.tx_pin, hit(lay, lay.tx_pin.x + 2, lay.tx_pin.y + 2).kind);
+    try std.testing.expectEqual(Hit.rx_pin, hit(lay, lay.rx_pin.x + 2, lay.rx_pin.y + 2).kind);
     state.view = .review;
     lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
     try std.testing.expect(lay.cancel.h >= tokens.Logical.touch_min);
     try std.testing.expect(lay.apply.h >= tokens.Logical.touch_min);
+}
+
+test "XIAO labels reuse the D0-D10 GPIO map" {
+    const expected = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
+    for (expected, 0..) |gpio, pin| {
+        try std.testing.expectEqual(@as(?u32, @intCast(pin)), xiao_pins.gpioToDigitalPin(@intCast(gpio)));
+    }
+    try std.testing.expect(gpioToXiaoDigitalPin(43) == null);
+}
+
+test "pin selector exposes only S3 masks and uses board-specific labels" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    var state: State = .{
+        .view = .settings,
+        .config_supported = true,
+        .uart_pin_options_available = true,
+        .board_profile_id = board_profile_xiao,
+        .uart_tx_gpio_mask = (@as(u64, 1) << 1) | (@as(u64, 1) << 22) | (@as(u64, 1) << 43),
+        .pin_select_target = .tx,
+    };
+    const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
+    try std.testing.expect(lay.pin_selector_active);
+    try std.testing.expectEqual(@as(i32, 0), lay.pin_options[0].w);
+    try std.testing.expect(lay.pin_options[1].w > 0);
+    try std.testing.expect(lay.pin_options[22].w > 0);
+    try std.testing.expect(lay.pin_options[43].w == 0); // XIAO UI only uses D0-D10.
+    var label_buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("D1", pinLabel(&label_buf, &state, 1));
+    try std.testing.expectEqual(Hit.pin_option, hit(lay, lay.pin_options[22].x + 3, lay.pin_options[22].y + 3).kind);
+
+    state.board_profile_id = 11;
+    state.uart_tx_gpio_mask = (@as(u64, 1) << 7) | (@as(u64, 1) << 43);
+    const generic = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
+    try std.testing.expect(generic.pin_options[7].w > 0);
+    try std.testing.expect(generic.pin_options[43].w > 0);
+    try std.testing.expectEqualStrings("GPIO7", pinLabel(&label_buf, &state, 7));
+}
+
+test "legacy S3 config has no selectable pin fallback" {
+    const gpa = std.testing.allocator;
+    var logical = try fb.LogicalFb.alloc(gpa);
+    defer logical.deinit(gpa);
+    const state: State = .{ .view = .settings, .config_supported = true, .draft_tx = 43, .draft_rx = 44 };
+    const lay = paint(&logical, tokens.Theme.industrialTealDark(), &state, 1);
+    try std.testing.expect(!lay.pin_selector_active);
+    try std.testing.expect(lay.tx_pin.w > 0);
 }

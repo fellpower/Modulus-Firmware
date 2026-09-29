@@ -29,9 +29,13 @@ typedef struct {
     bool uart_config_supported;
     bool uart_test_supported;
     bool uart_config_busy;
+    bool uart_pin_options_available;
+    uint8_t board_profile_id;
     int8_t uart_tx_gpio;
     int8_t uart_rx_gpio;
     uint32_t uart_baud;
+    uint64_t uart_tx_gpio_mask;
+    uint64_t uart_rx_gpio_mask;
     char s3_version[32];
     char image_version[32];
     char files[MODULUS_S3_OTA_MAX_FILES][MODULUS_S3_OTA_NAME_LEN];

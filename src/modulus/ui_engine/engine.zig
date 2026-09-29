@@ -52,6 +52,7 @@ const gestures = @import("gestures.zig");
 const input_pad = @import("input_pad.zig");
 const ascii_util = @import("ascii_util.zig");
 const ui_cmds = @import("ui_cmds.zig");
+const xiao_pins = @import("xiao_pins.zig");
 
 pub const WirelessUiCmd = ui_cmds.WirelessUiCmd;
 pub const StorSysUiCmd = ui_cmds.StorSysUiCmd;
@@ -100,18 +101,6 @@ fn zigbeeChannelGpioAllowed(gpio: u32) bool {
     return gpio <= 2 or (gpio >= 16 and gpio <= 23);
 }
 
-fn xiaoDigitalPinToGpio(pin: u32) ?u32 {
-    const gpio = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
-    if (pin >= gpio.len) return null;
-    return gpio[pin];
-}
-
-fn xiaoGpioToDigitalPin(gpio: i8) ?u32 {
-    const pins = [_]u8{ 0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18 };
-    for (pins, 0..) |candidate, pin| if (gpio == candidate) return @intCast(pin);
-    return null;
-}
-
 fn zigbeeStatusLedGpioAllowed(gpio: u32) bool {
     return gpio == 15 or zigbeeChannelGpioAllowed(gpio);
 }
@@ -124,9 +113,9 @@ test "zigbee node GPIO choices match firmware safety rules" {
     try std.testing.expect(!zigbeeChannelGpioAllowed(5));
     try std.testing.expect(!zigbeeChannelGpioAllowed(15));
     try std.testing.expect(zigbeeStatusLedGpioAllowed(15));
-    try std.testing.expectEqual(@as(?u32, 23), xiaoDigitalPinToGpio(5));
-    try std.testing.expectEqual(@as(?u32, 16), xiaoDigitalPinToGpio(6));
-    try std.testing.expectEqual(@as(?u32, 5), xiaoGpioToDigitalPin(23));
+    try std.testing.expectEqual(@as(?u32, 23), xiao_pins.digitalPinToGpio(5));
+    try std.testing.expectEqual(@as(?u32, 16), xiao_pins.digitalPinToGpio(6));
+    try std.testing.expectEqual(@as(?u32, 5), xiao_pins.gpioToDigitalPin(23));
 }
 
 const FocusKind = enum { none, gear, power, search, close };
@@ -4015,7 +4004,7 @@ pub const Engine = struct {
                     self.prefs.wireless.zb_node_led_gpio = @intCast(v);
                     _ = self.emitWireless(.{ .zb_node_status_led = .{ .gpio = @intCast(v), .flags = self.prefs.wireless.zb_node_led_flags } });
                 } else if (i < self.prefs.wireless.zb_node_channels.len) {
-                    const gpio = xiaoDigitalPinToGpio(v) orelse {
+                    const gpio = xiao_pins.digitalPinToGpio(v) orelse {
                         self.showSnackbarError("Use XIAO pin D0 to D10");
                         return;
                     };
@@ -6055,7 +6044,7 @@ pub const Engine = struct {
             .node_gpio => {
                 self.zb_node_channel_idx = h.dev;
                 const gpio = self.prefs.wireless.zb_node_channels[h.dev].gpio;
-                self.openNumberForTarget(.wl_zb_node_gpio, "XIAO pin D0-D10", xiaoGpioToDigitalPin(gpio) orelse 0);
+                self.openNumberForTarget(.wl_zb_node_gpio, "XIAO pin D0-D10", xiao_pins.gpioToDigitalPin(gpio) orelse 0);
             },
             .node_poll => {
                 self.zb_node_channel_idx = h.dev;
@@ -6503,6 +6492,22 @@ pub const Engine = struct {
                 self.requestFull();
             } else if (self.m_panel_tool == @intFromEnum(m_panel.ToolId.s3_update)) {
                 const h = m_panel_s3_ota.hit(self.m_panel_s3_ota_layout, x, y);
+                if (self.m_panel_s3_ota_state.pin_select_target != .none) {
+                    switch (h.kind) {
+                        .pin_option => {
+                            if (self.m_panel_s3_ota_state.pin_select_target == .tx) {
+                                self.m_panel_s3_ota_state.draft_tx = @intCast(h.index);
+                            } else {
+                                self.m_panel_s3_ota_state.draft_rx = @intCast(h.index);
+                            }
+                            self.m_panel_s3_ota_state.pin_select_target = .none;
+                        },
+                        .pin_select_close, .pin_select_outside => self.m_panel_s3_ota_state.pin_select_target = .none,
+                        else => {},
+                    }
+                    self.requestFull();
+                    return;
+                }
                 if (self.m_panel_s3_ota_state.view == .review) {
                     switch (h.kind) {
                         .scrim, .back, .detail_back => self.returnToMPanelFromTool(),
@@ -6534,18 +6539,21 @@ pub const Engine = struct {
                     .restart => if (self.m_panel_s3_ota_state.phase == .success) {
                         if (self.s3_ota_cmd_sink) |sink| sink(self, .restart, 0);
                     },
-                    .tx_minus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_tx > 0) {
-                        self.m_panel_s3_ota_state.draft_tx -= 1;
+                    .tx_pin => if (self.m_panel_s3_ota_state.config_supported) {
+                        if (self.m_panel_s3_ota_state.uart_pin_options_available) {
+                            self.m_panel_s3_ota_state.pin_select_target = .tx;
+                        } else {
+                            self.showSnackbarError("Update S3 firmware to select UART pins");
+                        }
                     },
-                    .tx_plus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_tx < 48) {
-                        self.m_panel_s3_ota_state.draft_tx += 1;
+                    .rx_pin => if (self.m_panel_s3_ota_state.config_supported) {
+                        if (self.m_panel_s3_ota_state.uart_pin_options_available) {
+                            self.m_panel_s3_ota_state.pin_select_target = .rx;
+                        } else {
+                            self.showSnackbarError("Update S3 firmware to select UART pins");
+                        }
                     },
-                    .rx_minus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_rx > 0) {
-                        self.m_panel_s3_ota_state.draft_rx -= 1;
-                    },
-                    .rx_plus => if (self.m_panel_s3_ota_state.config_supported and self.m_panel_s3_ota_state.draft_rx < 48) {
-                        self.m_panel_s3_ota_state.draft_rx += 1;
-                    },
+                    .pin_option, .pin_select_close, .pin_select_outside => {},
                     .baud => if (self.m_panel_s3_ota_state.config_supported) {
                         self.m_panel_s3_ota_state.draft_baud = switch (self.m_panel_s3_ota_state.draft_baud) {
                             115200 => 230400,
@@ -9530,6 +9538,44 @@ test "device review and gesture Back preserve the parent route" {
     try std.testing.expect(eng.gestureBack());
     try std.testing.expectEqual(@intFromEnum(m_panel.ToolId.devices), eng.m_panel_tool);
 
+}
+
+test "S3 UART selector uses provided pin options and updates only the selected draft" {
+    const gpa = std.testing.allocator;
+    var eng = try Engine.create(gpa);
+    defer eng.destroy(gpa);
+    eng.skipBoot();
+    eng.m_panel_tool = @intFromEnum(m_panel.ToolId.s3_update);
+    eng.m_panel_s3_ota_state.view = .settings;
+    eng.m_panel_s3_ota_state.config_supported = true;
+    eng.m_panel_s3_ota_state.uart_pin_options_available = true;
+    eng.m_panel_s3_ota_state.uart_tx_gpio_mask = (@as(u64, 1) << 6) | (@as(u64, 1) << 9);
+    eng.m_panel_s3_ota_state.uart_rx_gpio_mask = (@as(u64, 1) << 7) | (@as(u64, 1) << 8);
+    eng.m_panel_s3_ota_state.draft_tx = 6;
+    eng.m_panel_s3_ota_state.draft_rx = 7;
+    eng.m_panel_s3_ota_state.draft_baud = 230400;
+    eng.m_panel_s3_ota_layout = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+
+    const tx = eng.m_panel_s3_ota_layout.tx_pin;
+    eng.handleMPanelClick(tx.x + 2, tx.y + 2);
+    try std.testing.expectEqual(m_panel_s3_ota.PinSelectTarget.tx, eng.m_panel_s3_ota_state.pin_select_target);
+    eng.m_panel_s3_ota_layout = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+    const tx_option = eng.m_panel_s3_ota_layout.pin_options[9];
+    eng.handleMPanelClick(tx_option.x + 2, tx_option.y + 2);
+    try std.testing.expectEqual(@as(i8, 9), eng.m_panel_s3_ota_state.draft_tx);
+    try std.testing.expectEqual(@as(i8, 7), eng.m_panel_s3_ota_state.draft_rx);
+    try std.testing.expectEqual(@as(u32, 230400), eng.m_panel_s3_ota_state.draft_baud);
+
+    eng.m_panel_s3_ota_layout = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+    const rx = eng.m_panel_s3_ota_layout.rx_pin;
+    eng.handleMPanelClick(rx.x + 2, rx.y + 2);
+    try std.testing.expectEqual(m_panel_s3_ota.PinSelectTarget.rx, eng.m_panel_s3_ota_state.pin_select_target);
+    eng.m_panel_s3_ota_layout = m_panel_s3_ota.paint(&eng.logical, eng.theme, &eng.m_panel_s3_ota_state, 1);
+    const rx_option = eng.m_panel_s3_ota_layout.pin_options[8];
+    eng.handleMPanelClick(rx_option.x + 2, rx_option.y + 2);
+    try std.testing.expectEqual(@as(i8, 9), eng.m_panel_s3_ota_state.draft_tx);
+    try std.testing.expectEqual(@as(i8, 8), eng.m_panel_s3_ota_state.draft_rx);
+    try std.testing.expectEqual(@as(u32, 230400), eng.m_panel_s3_ota_state.draft_baud);
 }
 
 test "Node Configure resolves an available Modulus Node with cold-boot short state" {

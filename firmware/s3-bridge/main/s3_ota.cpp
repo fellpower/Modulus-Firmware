@@ -58,6 +58,40 @@ static bool uart_config_valid(const mod_s3_uart_config_t *cfg)
     return !pin_reserved(cfg->tx_gpio) && !pin_reserved(cfg->rx_gpio);
 }
 
+static_assert(GPIO_NUM_MAX <= 64, "S3 GPIO mask must cover every GPIO number");
+
+static mod_s3_board_profile_id_t board_profile_id(void)
+{
+    const bridge_board_t *board = bridge_board_get();
+    if (!board || !board->id) return MOD_S3_BOARD_UNKNOWN;
+    if (strcmp(board->id, "mini1") == 0) return MOD_S3_BOARD_MINI1;
+    if (strcmp(board->id, "ws-s3-zero") == 0) return MOD_S3_BOARD_WS_S3_ZERO;
+    if (strcmp(board->id, "s3-supermini") == 0) return MOD_S3_BOARD_S3_SUPERMINI;
+    if (strcmp(board->id, "qtpy-s3") == 0) return MOD_S3_BOARD_QTPY_S3;
+    if (strcmp(board->id, "feather-s3") == 0) return MOD_S3_BOARD_FEATHER_S3;
+    if (strcmp(board->id, "feather-s3-np") == 0) return MOD_S3_BOARD_FEATHER_S3_NP;
+    if (strcmp(board->id, "xiao") == 0) return MOD_S3_BOARD_XIAO;
+    if (strcmp(board->id, "xiao-plus") == 0) return MOD_S3_BOARD_XIAO_PLUS;
+    if (strcmp(board->id, "um-feathers3") == 0) return MOD_S3_BOARD_UM_FEATHERS3;
+    if (strcmp(board->id, "um-tinys3") == 0) return MOD_S3_BOARD_UM_TINYS3;
+    if (strcmp(board->id, "s3-devkitm1") == 0) return MOD_S3_BOARD_S3_DEVKITM1;
+    return MOD_S3_BOARD_UNKNOWN;
+}
+
+static void uart_gpio_masks(uint64_t *tx_mask, uint64_t *rx_mask)
+{
+    uint64_t tx = 0;
+    uint64_t rx = 0;
+    for (int gpio = 0; gpio < GPIO_NUM_MAX; ++gpio) {
+        if (pin_reserved(gpio)) continue;
+        const uint64_t bit = UINT64_C(1) << gpio;
+        if (GPIO_IS_VALID_OUTPUT_GPIO(gpio)) tx |= bit;
+        if (GPIO_IS_VALID_GPIO(gpio)) rx |= bit;
+    }
+    if (tx_mask) *tx_mask = tx;
+    if (rx_mask) *rx_mask = rx;
+}
+
 static void reset_session(bool abort_flash)
 {
     if (abort_flash && s_active) (void)esp_ota_abort(s_handle);
@@ -93,7 +127,16 @@ static void send_reply(const uint8_t mac[6], const mod_s3_ota_packet_t *request,
     reply.uart_rx_gpio = (int8_t)uart_bridge_rx_gpio();
     reply.uart_baud = uart_bridge_baud();
     reply.uart_test_result = test_result;
-    packet.payload_len = sizeof(reply);
+    packet.payload_len = offsetof(mod_s3_ota_reply_t, board_profile_id);
+    if (request->type == MOD_S3_CTRL_GET_UART || request->type == MOD_S3_CTRL_SET_UART) {
+        uint64_t tx_mask = 0;
+        uint64_t rx_mask = 0;
+        reply.board_profile_id = (uint8_t)board_profile_id();
+        uart_gpio_masks(&tx_mask, &rx_mask);
+        reply.uart_tx_gpio_mask = tx_mask;
+        reply.uart_rx_gpio_mask = rx_mask;
+        packet.payload_len = sizeof(reply);
+    }
     memcpy(packet.payload, &reply, sizeof(reply));
     (void)s_send(mac, reinterpret_cast<const uint8_t *>(&packet),
                  MOD_S3_OTA_HEADER_SIZE + packet.payload_len);

@@ -1454,6 +1454,10 @@ fn s3OtaPoll(eng: *Engine) void {
     next.config_supported = snap.uart_config_supported;
     next.test_supported = snap.uart_test_supported;
     next.config_busy = snap.uart_config_busy;
+    next.uart_pin_options_available = snap.uart_pin_options_available;
+    next.board_profile_id = snap.board_profile_id;
+    next.uart_tx_gpio_mask = snap.uart_tx_gpio_mask;
+    next.uart_rx_gpio_mask = snap.uart_rx_gpio_mask;
     next.uart_tx = snap.uart_tx_gpio;
     next.uart_rx = snap.uart_rx_gpio;
     next.uart_baud = snap.uart_baud;

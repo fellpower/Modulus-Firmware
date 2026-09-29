@@ -55,6 +55,9 @@ typedef struct {
     uint8_t reserved2;
     uint32_t uart_baud;
     uint8_t uart_test_result;
+    uint8_t board_profile_id;
+    uint64_t uart_tx_gpio_mask;
+    uint64_t uart_rx_gpio_mask;
 } mod_s3_ota_reply_t;
 
 typedef struct {
@@ -67,6 +70,43 @@ typedef struct {
 
 #define MOD_S3_CAP_UART_CONFIG 0x01U
 #define MOD_S3_CAP_UART_TEST   0x02U
+
+typedef enum {
+    MOD_S3_BOARD_UNKNOWN = 0,
+    MOD_S3_BOARD_MINI1 = 1,
+    MOD_S3_BOARD_WS_S3_ZERO = 2,
+    MOD_S3_BOARD_S3_SUPERMINI = 3,
+    MOD_S3_BOARD_QTPY_S3 = 4,
+    MOD_S3_BOARD_FEATHER_S3 = 5,
+    MOD_S3_BOARD_FEATHER_S3_NP = 6,
+    MOD_S3_BOARD_XIAO = 7,
+    MOD_S3_BOARD_XIAO_PLUS = 8,
+    MOD_S3_BOARD_UM_FEATHERS3 = 9,
+    MOD_S3_BOARD_UM_TINYS3 = 10,
+    MOD_S3_BOARD_S3_DEVKITM1 = 11,
+} mod_s3_board_profile_id_t;
+
+#if defined(__cplusplus)
+static_assert(offsetof(mod_s3_ota_reply_t, capabilities) == 36, "S3 reply capability offset changed");
+static_assert(offsetof(mod_s3_ota_reply_t, uart_tx_gpio) == 37, "S3 reply TX offset changed");
+static_assert(offsetof(mod_s3_ota_reply_t, uart_rx_gpio) == 38, "S3 reply RX offset changed");
+static_assert(offsetof(mod_s3_ota_reply_t, uart_baud) == 40, "S3 reply baud offset changed");
+static_assert(offsetof(mod_s3_ota_reply_t, uart_test_result) == 44, "S3 reply test offset changed");
+static_assert(offsetof(mod_s3_ota_reply_t, board_profile_id) == 45, "S3 reply base layout changed");
+static_assert(offsetof(mod_s3_ota_reply_t, uart_tx_gpio_mask) == 46, "S3 reply TX mask offset changed");
+static_assert(offsetof(mod_s3_ota_reply_t, uart_rx_gpio_mask) == 54, "S3 reply RX mask offset changed");
+static_assert(sizeof(mod_s3_ota_reply_t) == 62, "S3 reply extension layout changed");
+#else
+_Static_assert(offsetof(mod_s3_ota_reply_t, capabilities) == 36, "S3 reply capability offset changed");
+_Static_assert(offsetof(mod_s3_ota_reply_t, uart_tx_gpio) == 37, "S3 reply TX offset changed");
+_Static_assert(offsetof(mod_s3_ota_reply_t, uart_rx_gpio) == 38, "S3 reply RX offset changed");
+_Static_assert(offsetof(mod_s3_ota_reply_t, uart_baud) == 40, "S3 reply baud offset changed");
+_Static_assert(offsetof(mod_s3_ota_reply_t, uart_test_result) == 44, "S3 reply test offset changed");
+_Static_assert(offsetof(mod_s3_ota_reply_t, board_profile_id) == 45, "S3 reply base layout changed");
+_Static_assert(offsetof(mod_s3_ota_reply_t, uart_tx_gpio_mask) == 46, "S3 reply TX mask offset changed");
+_Static_assert(offsetof(mod_s3_ota_reply_t, uart_rx_gpio_mask) == 54, "S3 reply RX mask offset changed");
+_Static_assert(sizeof(mod_s3_ota_reply_t) == 62, "S3 reply extension layout changed");
+#endif
 
 typedef enum {
     MOD_S3_UART_TEST_NOT_RUN = 0,

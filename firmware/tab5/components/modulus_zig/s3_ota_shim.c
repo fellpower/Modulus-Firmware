@@ -184,11 +184,21 @@ static bool reply_has_uart_config(const mod_s3_ota_reply_t *reply)
 
 static bool reply_has_uart_test(const mod_s3_ota_reply_t *reply)
 {
-    return reply && s_reply_payload_len >= sizeof(mod_s3_ota_reply_t) &&
+    return reply && s_reply_payload_len >= offsetof(mod_s3_ota_reply_t, uart_test_result) + sizeof(reply->uart_test_result) &&
            (reply->capabilities & MOD_S3_CAP_UART_TEST) != 0;
 }
 
-static bool read_uart_config(int8_t *tx, int8_t *rx, uint32_t *baud)
+static bool reply_has_pin_options(const mod_s3_ota_reply_t *reply)
+{
+    return reply && s_reply_payload_len >= sizeof(mod_s3_ota_reply_t) &&
+           reply->board_profile_id > MOD_S3_BOARD_UNKNOWN &&
+           reply->board_profile_id <= MOD_S3_BOARD_S3_DEVKITM1 &&
+           reply->uart_tx_gpio_mask != 0 && reply->uart_rx_gpio_mask != 0;
+}
+
+static bool read_uart_config(int8_t *tx, int8_t *rx, uint32_t *baud,
+                             bool *pin_options, uint8_t *board_profile_id,
+                             uint64_t *tx_mask, uint64_t *rx_mask)
 {
     mod_s3_ota_packet_t packet = {0};
     packet.magic = MOD_S3_OTA_MAGIC;
@@ -202,6 +212,11 @@ static bool read_uart_config(int8_t *tx, int8_t *rx, uint32_t *baud)
     *tx = reply->uart_tx_gpio;
     *rx = reply->uart_rx_gpio;
     *baud = reply->uart_baud;
+    const bool has_options = reply_has_pin_options(reply);
+    if (pin_options) *pin_options = has_options;
+    if (board_profile_id) *board_profile_id = has_options ? reply->board_profile_id : MOD_S3_BOARD_UNKNOWN;
+    if (tx_mask) *tx_mask = has_options ? reply->uart_tx_gpio_mask : 0;
+    if (rx_mask) *rx_mask = has_options ? reply->uart_rx_gpio_mask : 0;
     return true;
 }
 
@@ -221,7 +236,9 @@ void modulus_s3_ota_refresh(void)
     next.s3_connected = probe_s3(next.s3_version, sizeof(next.s3_version));
     if (next.s3_connected) {
         next.uart_config_supported = read_uart_config(
-            &next.uart_tx_gpio, &next.uart_rx_gpio, &next.uart_baud);
+            &next.uart_tx_gpio, &next.uart_rx_gpio, &next.uart_baud,
+            &next.uart_pin_options_available, &next.board_profile_id,
+            &next.uart_tx_gpio_mask, &next.uart_rx_gpio_mask);
         if (next.uart_config_supported) {
             const mod_s3_ota_reply_t *reply = (const mod_s3_ota_reply_t *)s_reply_packet.payload;
             next.uart_test_supported = reply_has_uart_test(reply);
@@ -255,14 +272,22 @@ void modulus_s3_uart_config_refresh(void)
 {
     int8_t tx = -1, rx = -1;
     uint32_t baud = 0;
+    bool pin_options = false;
+    uint8_t board_profile_id = MOD_S3_BOARD_UNKNOWN;
+    uint64_t tx_mask = 0, rx_mask = 0;
     taskENTER_CRITICAL(&s_lock);
     s_state.uart_config_busy = true;
     taskEXIT_CRITICAL(&s_lock);
-    const bool ok = read_uart_config(&tx, &rx, &baud);
+    const bool ok = read_uart_config(&tx, &rx, &baud, &pin_options,
+                                     &board_profile_id, &tx_mask, &rx_mask);
     taskENTER_CRITICAL(&s_lock);
     s_state.uart_config_busy = false;
     s_state.s3_connected = ok || s_state.s3_connected;
     s_state.uart_config_supported = ok;
+    s_state.uart_pin_options_available = ok && pin_options;
+    s_state.board_profile_id = ok ? board_profile_id : MOD_S3_BOARD_UNKNOWN;
+    s_state.uart_tx_gpio_mask = ok ? tx_mask : 0;
+    s_state.uart_rx_gpio_mask = ok ? rx_mask : 0;
     if (ok) {
         const mod_s3_ota_reply_t *reply = (const mod_s3_ota_reply_t *)s_reply_packet.payload;
         s_state.uart_test_supported = reply_has_uart_test(reply);
@@ -305,6 +330,10 @@ void modulus_s3_uart_config_apply(int8_t tx_gpio, int8_t rx_gpio, uint32_t baud)
         s_state.uart_tx_gpio = reply->uart_tx_gpio;
         s_state.uart_rx_gpio = reply->uart_rx_gpio;
         s_state.uart_baud = reply->uart_baud;
+        s_state.uart_pin_options_available = reply_has_pin_options(reply);
+        s_state.board_profile_id = s_state.uart_pin_options_available ? reply->board_profile_id : MOD_S3_BOARD_UNKNOWN;
+        s_state.uart_tx_gpio_mask = s_state.uart_pin_options_available ? reply->uart_tx_gpio_mask : 0;
+        s_state.uart_rx_gpio_mask = s_state.uart_pin_options_available ? reply->uart_rx_gpio_mask : 0;
         snprintf(s_state.status, sizeof(s_state.status), "S3 UART settings saved and activated.");
     } else if (replied && status == MOD_S3_OTA_BAD_CONFIG) {
         snprintf(s_state.status, sizeof(s_state.status), "Rejected: GPIO combination or baud rate is not safe.");
